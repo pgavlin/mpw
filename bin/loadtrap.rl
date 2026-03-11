@@ -33,7 +33,7 @@
 #include <sys/types.h>
 #include <limits.h>
 
-#ifndef digittoint
+#if !defined(__APPLE__)
 static inline int digittoint(int c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
