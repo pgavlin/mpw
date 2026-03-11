@@ -36,6 +36,41 @@ namespace rsrc {
 
 namespace {
 
+	// AppleDouble entry IDs
+	enum {
+		kEntryResourceFork = 2,
+		kEntryFinderInfo = 9,
+	};
+
+	// AppleDouble constants
+	const uint32_t kAppleDoubleMagic = 0x00051607;
+	const uint32_t kAppleDoubleVersion = 0x00020000;
+	const size_t kAppleDoubleHeaderSize = 26; // magic(4) + version(4) + filler(16) + numEntries(2)
+	const size_t kAppleDoubleEntrySize = 12;  // entryID(4) + offset(4) + length(4)
+	const size_t kFinderInfoSize = 32;
+
+	uint32_t read32(const uint8_t *p) {
+		return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) |
+		       (uint32_t(p[2]) << 8) | p[3];
+	}
+
+	uint16_t read16(const uint8_t *p) {
+		return (uint16_t(p[0]) << 8) | p[1];
+	}
+
+	void write32(uint8_t *p, uint32_t v) {
+		p[0] = (v >> 24) & 0xff;
+		p[1] = (v >> 16) & 0xff;
+		p[2] = (v >> 8) & 0xff;
+		p[3] = v & 0xff;
+	}
+
+	void write16(uint8_t *p, uint16_t v) {
+		p[0] = (v >> 8) & 0xff;
+		p[1] = v & 0xff;
+	}
+
+
 	// Read an entire file into a byte vector. Returns empty on failure.
 	std::vector<uint8_t> readFile(const std::string &path) {
 		int fd = ::open(path.c_str(), O_RDONLY);
@@ -103,86 +138,127 @@ namespace {
 	}
 
 
-	// Parse AppleDouble format (magic 0x00051607) to extract the resource fork (entry ID 2).
-	std::vector<uint8_t> parseAppleDouble(const std::vector<uint8_t> &data) {
-		if (data.size() < 26) return {};
+	// Parsed AppleDouble entry descriptor
+	struct ADEntry {
+		uint32_t id;
+		uint32_t offset;
+		uint32_t length;
+	};
 
-		// Check magic
-		uint32_t magic = (uint32_t(data[0]) << 24) | (uint32_t(data[1]) << 16) |
-		                 (uint32_t(data[2]) << 8) | data[3];
-		if (magic != 0x00051607) return {};
 
-		// Check version
-		uint32_t version = (uint32_t(data[4]) << 24) | (uint32_t(data[5]) << 16) |
-		                   (uint32_t(data[6]) << 8) | data[7];
-		if (version != 0x00020000) return {};
+	// Parse AppleDouble header and return entry descriptors.
+	// Returns false if the data is not valid AppleDouble.
+	bool parseAppleDoubleEntries(const std::vector<uint8_t> &data,
+	                             std::vector<ADEntry> &entries) {
+		entries.clear();
+		if (data.size() < kAppleDoubleHeaderSize) return false;
 
-		// Number of entries at offset 24
-		uint16_t numEntries = (uint16_t(data[24]) << 8) | data[25];
+		if (read32(data.data()) != kAppleDoubleMagic) return false;
+		if (read32(data.data() + 4) != kAppleDoubleVersion) return false;
 
-		// Each entry is 12 bytes starting at offset 26
+		uint16_t numEntries = read16(data.data() + 24);
+
 		for (int i = 0; i < numEntries; ++i) {
-			size_t entryOff = 26 + i * 12;
-			if (entryOff + 12 > data.size()) break;
+			size_t off = kAppleDoubleHeaderSize + i * kAppleDoubleEntrySize;
+			if (off + kAppleDoubleEntrySize > data.size()) break;
 
-			uint32_t entryID = (uint32_t(data[entryOff]) << 24) |
-			                   (uint32_t(data[entryOff + 1]) << 16) |
-			                   (uint32_t(data[entryOff + 2]) << 8) |
-			                   data[entryOff + 3];
-			uint32_t offset = (uint32_t(data[entryOff + 4]) << 24) |
-			                  (uint32_t(data[entryOff + 5]) << 16) |
-			                  (uint32_t(data[entryOff + 6]) << 8) |
-			                  data[entryOff + 7];
-			uint32_t length = (uint32_t(data[entryOff + 8]) << 24) |
-			                  (uint32_t(data[entryOff + 9]) << 16) |
-			                  (uint32_t(data[entryOff + 10]) << 8) |
-			                  data[entryOff + 11];
+			ADEntry e;
+			e.id = read32(data.data() + off);
+			e.offset = read32(data.data() + off + 4);
+			e.length = read32(data.data() + off + 8);
+			entries.push_back(e);
+		}
+		return true;
+	}
 
-			if (entryID == 2) { // Resource fork
-				if (offset + length > data.size()) return {};
-				return std::vector<uint8_t>(data.begin() + offset,
-				                            data.begin() + offset + length);
+
+	// Extract a specific entry from parsed AppleDouble data.
+	std::vector<uint8_t> extractEntry(const std::vector<uint8_t> &data,
+	                                  const std::vector<ADEntry> &entries,
+	                                  uint32_t entryID) {
+		for (const auto &e : entries) {
+			if (e.id == entryID) {
+				if (e.offset + e.length > data.size()) return {};
+				return std::vector<uint8_t>(data.begin() + e.offset,
+				                            data.begin() + e.offset + e.length);
 			}
 		}
-
 		return {};
 	}
 
 
-	// Create an AppleDouble file containing a resource fork
-	std::vector<uint8_t> createAppleDouble(const std::vector<uint8_t> &rsrcData) {
-		// Header: magic(4) + version(4) + filler(16) + numEntries(2) = 26
-		// One entry: entryID(4) + offset(4) + length(4) = 12
-		// Total header = 38 bytes, then resource fork data
+	// Build an AppleDouble sidecar from the given entries.
+	// Each pair is (entryID, data).
+	std::vector<uint8_t> buildAppleDouble(
+	    const std::vector<std::pair<uint32_t, std::vector<uint8_t>>> &entries) {
 
-		uint32_t rsrcOffset = 38;
-		std::vector<uint8_t> out(rsrcOffset + rsrcData.size(), 0);
+		uint16_t numEntries = entries.size();
+		size_t headerSize = kAppleDoubleHeaderSize + numEntries * kAppleDoubleEntrySize;
 
-		// Magic
-		out[0] = 0x00; out[1] = 0x05; out[2] = 0x16; out[3] = 0x07;
-		// Version
-		out[4] = 0x00; out[5] = 0x02; out[6] = 0x00; out[7] = 0x00;
-		// Filler: 16 bytes of zeros (already zeroed)
-		// Number of entries: 1
-		out[24] = 0x00; out[25] = 0x01;
-		// Entry: ID=2 (resource fork)
-		out[26] = 0x00; out[27] = 0x00; out[28] = 0x00; out[29] = 0x02;
-		// Offset
-		out[30] = (rsrcOffset >> 24) & 0xff;
-		out[31] = (rsrcOffset >> 16) & 0xff;
-		out[32] = (rsrcOffset >> 8) & 0xff;
-		out[33] = rsrcOffset & 0xff;
-		// Length
-		uint32_t len = rsrcData.size();
-		out[34] = (len >> 24) & 0xff;
-		out[35] = (len >> 16) & 0xff;
-		out[36] = (len >> 8) & 0xff;
-		out[37] = len & 0xff;
+		// Calculate total size
+		size_t totalSize = headerSize;
+		for (const auto &e : entries) totalSize += e.second.size();
 
-		// Resource fork data
-		std::memcpy(out.data() + rsrcOffset, rsrcData.data(), rsrcData.size());
+		std::vector<uint8_t> out(totalSize, 0);
+
+		// Header
+		write32(out.data(), kAppleDoubleMagic);
+		write32(out.data() + 4, kAppleDoubleVersion);
+		// filler (16 bytes of zeros) - already zeroed
+		write16(out.data() + 24, numEntries);
+
+		// Entry table and data
+		uint32_t dataOffset = headerSize;
+		for (int i = 0; i < numEntries; ++i) {
+			size_t entryOff = kAppleDoubleHeaderSize + i * kAppleDoubleEntrySize;
+			write32(out.data() + entryOff, entries[i].first);
+			write32(out.data() + entryOff + 4, dataOffset);
+			write32(out.data() + entryOff + 8, entries[i].second.size());
+
+			if (!entries[i].second.empty()) {
+				std::memcpy(out.data() + dataOffset,
+				            entries[i].second.data(),
+				            entries[i].second.size());
+			}
+			dataOffset += entries[i].second.size();
+		}
 
 		return out;
+	}
+
+
+	// Read existing AppleDouble sidecar, update one entry, preserve others.
+	bool updateAppleDoubleEntry(const std::string &path,
+	                            uint32_t entryID,
+	                            const std::vector<uint8_t> &entryData) {
+		std::string adPath = appleDoublePath(path);
+
+		// Read existing sidecar (may not exist)
+		auto existing = readFile(adPath);
+		std::vector<ADEntry> oldEntries;
+
+		// Build new entry list preserving existing entries
+		std::vector<std::pair<uint32_t, std::vector<uint8_t>>> newEntries;
+		bool replaced = false;
+
+		if (!existing.empty() && parseAppleDoubleEntries(existing, oldEntries)) {
+			for (const auto &oe : oldEntries) {
+				if (oe.id == entryID) {
+					newEntries.push_back({entryID, entryData});
+					replaced = true;
+				} else {
+					auto data = extractEntry(existing, {oe}, oe.id);
+					newEntries.push_back({oe.id, std::move(data)});
+				}
+			}
+		}
+
+		if (!replaced) {
+			newEntries.push_back({entryID, entryData});
+		}
+
+		auto adData = buildAppleDouble(newEntries);
+		return writeFile(adPath, adData);
 	}
 
 } // anon namespace
@@ -204,8 +280,11 @@ std::vector<uint8_t> readResourceFork(const std::string &path) {
 		std::string adPath = appleDoublePath(path);
 		auto adData = readFile(adPath);
 		if (!adData.empty()) {
-			auto rsrcData = parseAppleDouble(adData);
-			if (!rsrcData.empty()) return rsrcData;
+			std::vector<ADEntry> entries;
+			if (parseAppleDoubleEntries(adData, entries)) {
+				auto rsrcData = extractEntry(adData, entries, kEntryResourceFork);
+				if (!rsrcData.empty()) return rsrcData;
+			}
 		}
 	}
 
@@ -223,12 +302,160 @@ bool writeResourceFork(const std::string &path, const std::vector<uint8_t> &data
 	}
 #endif
 
-	// Fall back to AppleDouble sidecar
+	// Fall back to AppleDouble sidecar (preserves existing Finder Info)
+	return updateAppleDoubleEntry(path, kEntryResourceFork, data);
+}
+
+
+uint32_t resourceForkSize(const std::string &path) {
+
+#ifdef __APPLE__
+	{
+		std::string forkPath = path + "/..namedfork/rsrc";
+		struct stat st;
+		if (::stat(forkPath.c_str(), &st) == 0)
+			return st.st_size;
+	}
+#endif
+
+	// Try AppleDouble sidecar
 	{
 		std::string adPath = appleDoublePath(path);
-		auto adData = createAppleDouble(data);
-		return writeFile(adPath, adData);
+		auto adData = readFile(adPath);
+		if (!adData.empty()) {
+			std::vector<ADEntry> entries;
+			if (parseAppleDoubleEntries(adData, entries)) {
+				for (const auto &e : entries) {
+					if (e.id == kEntryResourceFork)
+						return e.length;
+				}
+			}
+		}
 	}
+
+	return 0;
+}
+
+
+bool readFinderInfo(const std::string &path, void *buffer, size_t bufferSize) {
+	if (bufferSize > kFinderInfoSize) bufferSize = kFinderInfoSize;
+
+	std::string adPath = appleDoublePath(path);
+	auto adData = readFile(adPath);
+	if (adData.empty()) return false;
+
+	std::vector<ADEntry> entries;
+	if (!parseAppleDoubleEntries(adData, entries)) return false;
+
+	auto fiData = extractEntry(adData, entries, kEntryFinderInfo);
+	if (fiData.empty()) return false;
+
+	size_t copySize = std::min(bufferSize, fiData.size());
+	std::memcpy(buffer, fiData.data(), copySize);
+	return true;
+}
+
+
+bool writeFinderInfo(const std::string &path, const void *info, size_t infoSize) {
+	if (infoSize > kFinderInfoSize) infoSize = kFinderInfoSize;
+
+	std::vector<uint8_t> fiData(kFinderInfoSize, 0);
+	std::memcpy(fiData.data(), info, infoSize);
+
+	return updateAppleDoubleEntry(path, kEntryFinderInfo, fiData);
+}
+
+
+int openResourceFork(const std::string &path, int nativeFlags) {
+
+#ifdef __APPLE__
+	{
+		std::string forkPath = path + "/..namedfork/rsrc";
+		int fd = ::open(forkPath.c_str(), nativeFlags, 0666);
+		if (fd >= 0) return fd;
+		// If O_CREAT was requested, try creating
+		if ((nativeFlags & O_CREAT) && errno == ENOENT) {
+			fd = ::open(forkPath.c_str(), nativeFlags | O_CREAT, 0666);
+			if (fd >= 0) return fd;
+		}
+	}
+#endif
+
+	// On non-macOS: extract resource fork to a temp file.
+	// Caller is responsible for writing back via writeResourceFork on close.
+	auto rsrcData = readResourceFork(path);
+
+	char tmpPath[] = "/tmp/mpw_rsrc_XXXXXX";
+	int fd = ::mkstemp(tmpPath);
+	if (fd < 0) return -1;
+
+	// Immediately unlink so the temp file is cleaned up if we crash.
+	// We'll read it back via the fd before closing.
+	// Actually, we need the path for the FDEntry to track it.
+	// Don't unlink — we'll clean up in close.
+
+	if (!rsrcData.empty()) {
+		ssize_t total = 0;
+		ssize_t size = rsrcData.size();
+		while (total < size) {
+			ssize_t n = ::write(fd, rsrcData.data() + total, size - total);
+			if (n <= 0) {
+				::close(fd);
+				::unlink(tmpPath);
+				return -1;
+			}
+			total += n;
+		}
+		::lseek(fd, 0, SEEK_SET);
+	}
+
+	if (nativeFlags & O_TRUNC) {
+		::ftruncate(fd, 0);
+	}
+
+	// Store the temp path in a way the caller can retrieve.
+	// We use a static to pass it back (not thread-safe, but matches
+	// the single-threaded nature of this emulator).
+	lastTempPath() = tmpPath;
+
+	return fd;
+}
+
+
+std::string &lastTempPath() {
+	static std::string path;
+	return path;
+}
+
+
+bool closeResourceFork(int fd, const std::string &originalPath,
+                       const std::string &tempPath) {
+	if (tempPath.empty()) {
+		// macOS path — just close
+		::close(fd);
+		return true;
+	}
+
+	// Read temp file contents and write back to AppleDouble sidecar
+	struct stat st;
+	bool ok = true;
+	if (::fstat(fd, &st) == 0 && st.st_size > 0) {
+		std::vector<uint8_t> data(st.st_size);
+		::lseek(fd, 0, SEEK_SET);
+		ssize_t total = 0;
+		while (total < st.st_size) {
+			ssize_t n = ::read(fd, data.data() + total, st.st_size - total);
+			if (n <= 0) break;
+			total += n;
+		}
+		if (total == st.st_size) {
+			ok = writeResourceFork(originalPath, data);
+		}
+	}
+
+	::close(fd);
+	::unlink(tempPath.c_str());
+	return ok;
 }
 
 } // namespace rsrc

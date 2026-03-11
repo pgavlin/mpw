@@ -502,61 +502,94 @@ def find_mpw_content(dirs):
 # File Writing with Resource Fork Preservation
 # ---------------------------------------------------------------------------
 
-def create_apple_double(rsrc_data):
-    """Create AppleDouble sidecar content for a resource fork."""
-    rsrc_offset = 38
-    out = bytearray(rsrc_offset + len(rsrc_data))
+def create_apple_double(rsrc_data, finder_info=None):
+    """Create AppleDouble sidecar content with Finder Info and/or resource fork."""
+    entries = []
+    if finder_info:
+        # Pad Finder Info to 32 bytes
+        fi = bytearray(32)
+        fi[:len(finder_info)] = finder_info
+        entries.append((9, bytes(fi)))  # Entry ID 9 = Finder Info
+    if rsrc_data:
+        entries.append((2, rsrc_data))  # Entry ID 2 = Resource fork
+
+    if not entries:
+        return None
+
+    num_entries = len(entries)
+    header_size = 26 + num_entries * 12  # header + entry table
+
+    # Calculate total size
+    total = header_size
+    for _, data in entries:
+        total += len(data)
+
+    out = bytearray(total)
     # Magic
     struct.pack_into('>I', out, 0, 0x00051607)
     # Version
     struct.pack_into('>I', out, 4, 0x00020000)
     # Filler: 16 bytes of zeros (already zeroed)
-    # Number of entries: 1
-    struct.pack_into('>H', out, 24, 1)
-    # Entry: ID=2 (resource fork)
-    struct.pack_into('>I', out, 26, 2)
-    # Offset
-    struct.pack_into('>I', out, 30, rsrc_offset)
-    # Length
-    struct.pack_into('>I', out, 34, len(rsrc_data))
-    # Resource fork data
-    out[rsrc_offset:] = rsrc_data
+    # Number of entries
+    struct.pack_into('>H', out, 24, num_entries)
+
+    # Entry table and data
+    data_offset = header_size
+    for i, (entry_id, data) in enumerate(entries):
+        entry_off = 26 + i * 12
+        struct.pack_into('>I', out, entry_off, entry_id)
+        struct.pack_into('>I', out, entry_off + 4, data_offset)
+        struct.pack_into('>I', out, entry_off + 8, len(data))
+        out[data_offset:data_offset + len(data)] = data
+        data_offset += len(data)
+
     return bytes(out)
 
 
-def write_file(dest, data_fork, rsrc_fork):
-    """Write a file with its data fork and optional resource fork."""
+def write_file(dest, data_fork, rsrc_fork, finder_info=None):
+    """Write a file with its data fork, optional resource fork, and Finder Info."""
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     with open(dest, 'wb') as f:
         f.write(data_fork)
 
-    if not rsrc_fork:
-        return
-
     if sys.platform == 'darwin':
-        # Use xattr to set resource fork
-        try:
-            import xattr
-            xattr.setxattr(dest, 'com.apple.ResourceFork', rsrc_fork)
-        except ImportError:
-            # Fall back to writing to ..namedfork/rsrc directly
+        if finder_info:
             try:
-                rsrc_path = dest + '/..namedfork/rsrc'
-                with open(rsrc_path, 'wb') as f:
-                    f.write(rsrc_fork)
-            except OSError:
-                _write_apple_double(dest, rsrc_fork)
+                import xattr
+                # Pad to 32 bytes
+                fi = bytearray(32)
+                fi[:len(finder_info)] = finder_info
+                xattr.setxattr(dest, 'com.apple.FinderInfo', bytes(fi))
+            except (ImportError, OSError):
+                pass
+        if rsrc_fork:
+            try:
+                import xattr
+                xattr.setxattr(dest, 'com.apple.ResourceFork', rsrc_fork)
+            except ImportError:
+                try:
+                    rsrc_path = dest + '/..namedfork/rsrc'
+                    with open(rsrc_path, 'wb') as f:
+                        f.write(rsrc_fork)
+                except OSError:
+                    _write_apple_double(dest, rsrc_fork, finder_info)
+        elif finder_info:
+            _write_apple_double(dest, None, finder_info)
     else:
-        _write_apple_double(dest, rsrc_fork)
+        if rsrc_fork or finder_info:
+            _write_apple_double(dest, rsrc_fork, finder_info)
 
 
-def _write_apple_double(dest, rsrc_fork):
+def _write_apple_double(dest, rsrc_fork, finder_info=None):
     """Write an AppleDouble sidecar file."""
+    ad_data = create_apple_double(rsrc_fork, finder_info)
+    if ad_data is None:
+        return
     directory = os.path.dirname(dest)
     basename = os.path.basename(dest)
     sidecar = os.path.join(directory, '._' + basename)
     with open(sidecar, 'wb') as f:
-        f.write(create_apple_double(rsrc_fork))
+        f.write(ad_data)
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +759,8 @@ def main():
 
                 data_fork = vol.read_data_fork(hfs_file)
                 rsrc_fork = vol.read_rsrc_fork(hfs_file)
-                write_file(dest, data_fork, rsrc_fork)
+                finder_info = hfs_file.finder_type + hfs_file.finder_creator
+                write_file(dest, data_fork, rsrc_fork, finder_info)
                 extracted += 1
                 if extracted % 200 == 0:
                     print(f"    {extracted} files extracted...")

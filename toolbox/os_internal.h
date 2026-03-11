@@ -32,6 +32,7 @@ namespace Internal {
 		bool resource;
 
 		std::string filename;
+		std::string tempPath; // non-empty if resource fork backed by a temp file
 
 		FDEntry() :
 			refcount(0),

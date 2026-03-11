@@ -29,6 +29,7 @@
 #include "toolbox.h"
 #include "path_utils.h"
 
+#include <rsrc/rsrc.h>
 #include <macos/errors.h>
 
 #include <stdexcept>
@@ -88,7 +89,6 @@ namespace OS { namespace Internal {
 
 	uint16_t GetFinderInfo(const std::string &pathName, void *info, bool extended)
 	{
-		// todo -- move to separate function? used in multiple places.
 		uint8_t buffer[32];
 		std::memset(buffer, 0, sizeof(buffer));
 		int rv;
@@ -103,6 +103,9 @@ namespace OS { namespace Internal {
 				case EACCES:
 					return macos_error_from_errno();
 			}
+
+			// Try AppleDouble sidecar for Finder Info
+			rsrc::readFinderInfo(pathName, buffer, 32);
 
 			// check for prodos ftype/auxtype
 			uint8_t ftype;
@@ -186,7 +189,6 @@ namespace OS { namespace Internal {
 			std::memcpy(buffer, "TEXTMPS ", 8);
 		}
 
-
 		// convert pdos types...
 		if (std::memcmp(buffer + 4, "pdos", 4) == 0)
 		{
@@ -253,6 +255,7 @@ namespace OS { namespace Internal {
 		}
 		else
 		{
+			// Read existing info so we only overwrite the first 16 bytes.
 			rv = ::getxattr(pathName.c_str(), XATTR_FINDERINFO_NAME, buffer, 32, 0, 0);
 
 			if (rv < 0)
@@ -263,6 +266,8 @@ namespace OS { namespace Internal {
 					case EACCES:
 						return macos_error_from_errno();
 				}
+				// Try AppleDouble sidecar for existing info
+				rsrc::readFinderInfo(pathName, buffer, 32);
 			}
 			std::memmove(buffer, info, 16);
 
@@ -284,7 +289,13 @@ namespace OS { namespace Internal {
 		}
 
 		rv = ::setxattr(pathName.c_str(), XATTR_FINDERINFO_NAME, buffer, 32, 0, 0);
-		if (rv < 0) return macos_error_from_errno();
+		if (rv < 0)
+		{
+			// xattr not supported (e.g. Linux) — write to AppleDouble sidecar
+			if (rsrc::writeFinderInfo(pathName, buffer, 32))
+				return 0;
+			return macos_error_from_errno();
+		}
 
 		return 0;
 	}
@@ -344,6 +355,10 @@ namespace OS { namespace Internal {
 			if (modificationDate) {
 				tv[1].tv_sec = MacToUnix(modificationDate);
 				rv = utimes(pathname.c_str(), tv);
+			} else {
+				// setattrlist not available (e.g. Linux) and no mod date to set via utimes.
+				// Creation time and backup time can't be set on Linux; treat as success.
+				rv = 0;
 			}
 
 		}
@@ -401,6 +416,7 @@ namespace OS { namespace Internal {
 		e.text = false;
 		e.resource = false;
 		e.filename = std::move(filename);
+		e.tempPath.clear();
 		return e;
 	}
 
@@ -416,6 +432,7 @@ namespace OS { namespace Internal {
 		e.text = false;
 		e.resource = false;
 		e.filename = filename;
+		e.tempPath.clear();
 		return e;
 	}
 
@@ -437,6 +454,14 @@ namespace OS { namespace Internal {
 		if (--e.refcount == 0 || force)
 		{
 			e.refcount = 0;
+
+			if (e.resource && !e.tempPath.empty())
+			{
+				rsrc::closeResourceFork(fd, e.filename, e.tempPath);
+				e.tempPath.clear();
+				return 0;
+			}
+
 			return ::close(fd);
 		}
 		return 0;
@@ -546,25 +571,35 @@ namespace OS { namespace Internal {
 		}
 
 		std::string resolved = OS::resolve_path_ci(filename);
-		std::string xname = resolved;
-		if (fork) {
-			xname.append(_PATH_RSRCFORKSPEC);
-			// O_RDWR should also O_CREAT
-		}
 
-		Log("     open(%s, %04x)\n", xname.c_str(), access);
-
-		fd = ::open(xname.c_str(), access);
-
-		if (fd < 0 && access == O_RDWR && errno == ENOENT && fork)
+		if (fork)
 		{
-			fd = ::open(xname.c_str(), O_RDWR | O_CREAT, 0666);
+			int nativeFlags = access;
+			if (access == O_RDWR) nativeFlags |= O_CREAT;
+
+			Log("     open(%s [rsrc], %04x)\n", resolved.c_str(), access);
+
+			fd = rsrc::openResourceFork(resolved, nativeFlags);
+			if (fd < 0)
+			{
+				return macos_error_from_errno();
+			}
+
+			auto &e = OS::Internal::FDEntry::allocate(fd, resolved);
+			e.resource = true;
+			e.text = false;
+			e.tempPath = rsrc::lastTempPath();
+
+			return fd;
 		}
 
+		Log("     open(%s, %04x)\n", resolved.c_str(), access);
+
+		fd = ::open(resolved.c_str(), access);
 
 		if (fd < 0 && ioPermission == fsCurPerm && errno == EACCES)
 		{
-			fd = ::open(xname.c_str(), O_RDONLY);
+			fd = ::open(resolved.c_str(), O_RDONLY);
 		}
 
 		if (fd < 0)
@@ -575,8 +610,8 @@ namespace OS { namespace Internal {
 		// allocate the fd entry
 
 		auto &e = OS::Internal::FDEntry::allocate(fd, resolved);
-		e.resource = fork;
-		e.text = fork ? false : IsTextFile(filename);
+		e.resource = false;
+		e.text = IsTextFile(filename);
 
 		return fd;
 	}

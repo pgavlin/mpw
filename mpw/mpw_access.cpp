@@ -51,6 +51,7 @@
 #include <toolbox/os_internal.h>
 #include <toolbox/path_utils.h>
 
+#include <rsrc/rsrc.h>
 #include <macos/errors.h>
 
 /*
@@ -249,16 +250,11 @@ namespace MPW
 
 			fd = -1;
 			if (parent >= 0) {
-
-				std::string rsrcname = sname;
-				rsrcname.append(_PATH_RSRCFORKSPEC);
+				::close(parent);
 
 				nativeFlags &= ~O_EXCL;
-				// APFS, etc - resource fork doesn't automatically exist so
-				// need O_CREAT.
 				if ((nativeFlags & O_ACCMODE) != O_RDONLY) nativeFlags |= O_CREAT;
-				fd = ::open(rsrcname.c_str(), nativeFlags, 0666);
-				close(parent);
+				fd = rsrc::openResourceFork(sname, nativeFlags);
 			}
 
 		} else {
@@ -292,6 +288,9 @@ namespace MPW
 			auto &e = OS::Internal::FDEntry::allocate(fd, std::move(sname));
 			e.text = !(f.flags & kO_BINARY);
 			e.resource = f.flags & kO_RSRC;
+			if (f.flags & kO_RSRC) {
+				e.tempPath = rsrc::lastTempPath();
+			}
 		}
 
 		memoryWriteWord(f.flags, parm + 0);

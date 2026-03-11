@@ -102,10 +102,10 @@ std::unique_ptr<ResourceFile> ResourceFile::open(const std::vector<uint8_t> &dat
 	if (typeListOffset + 2 > mapLength) return nullptr;
 
 	uint16_t numTypesMinusOne = read16(typeListBase);
-	int numTypes = (int)numTypesMinusOne + 1;
+	int numTypes = numTypesMinusOne == 0xFFFF ? 0 : (int)numTypesMinusOne + 1;
 
 	// each type entry is 8 bytes, starting after the count word
-	if (typeListOffset + 2 + numTypes * 8 > mapLength) return nullptr;
+	if (numTypes > 0 && typeListOffset + 2 + numTypes * 8 > mapLength) return nullptr;
 
 	rf->types_.resize(numTypes);
 
@@ -265,15 +265,20 @@ void ResourceFile::addResource(uint32_t type, int16_t id, const std::string &nam
 	entry.id = id;
 	entry.name = name;
 	entry.attributes = attrs | resChanged;
-	entry.dataOffset = 0; // will be assigned during serialize
 	entry.dataSize = resData.size();
 
-	te->resources.push_back(std::move(entry));
+	// Store the data in data_ so loadResource() can find it during serialize().
+	// dataOffset is relative to dataOffset_ in the raw buffer.
+	// We append: 4-byte size + data bytes.
+	uint32_t appendPos = data_.size();
+	entry.dataOffset = appendPos - dataOffset_;
 
-	// We need to store the data somewhere for serialize to find it.
-	// We'll append it to the data_ buffer and update the offset.
-	// For simplicity, use a special high offset to mark new resources.
-	// The serialize() method will handle this properly.
+	uint8_t sizeBuf[4];
+	write32(sizeBuf, resData.size());
+	data_.insert(data_.end(), sizeBuf, sizeBuf + 4);
+	data_.insert(data_.end(), resData.begin(), resData.end());
+
+	te->resources.push_back(std::move(entry));
 }
 
 
@@ -292,14 +297,24 @@ bool ResourceFile::removeResource(uint32_t type, int16_t id) {
 
 
 bool ResourceFile::updateResource(const ResourceEntry &entry, const std::vector<uint8_t> &newData) {
-	// find the resource
+	return updateResource(entry.type, entry.id, newData);
+}
+
+bool ResourceFile::updateResource(uint32_t type, int16_t id, const std::vector<uint8_t> &newData) {
 	for (auto &te : types_) {
-		if (te.type != entry.type) continue;
+		if (te.type != type) continue;
 		for (auto &re : te.resources) {
-			if (re.id == entry.id) {
+			if (re.id == id) {
 				re.attributes |= resChanged;
-				// For simplicity with the current architecture,
-				// we mark it changed. The serialize method rebuilds everything.
+				// Update the data in data_ so serialize/loadResource finds the new data.
+				uint32_t appendPos = data_.size();
+				re.dataOffset = appendPos - dataOffset_;
+				re.dataSize = newData.size();
+
+				uint8_t sizeBuf[4];
+				write32(sizeBuf, newData.size());
+				data_.insert(data_.end(), sizeBuf, sizeBuf + 4);
+				data_.insert(data_.end(), newData.begin(), newData.end());
 				return true;
 			}
 		}

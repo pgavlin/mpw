@@ -93,6 +93,7 @@ namespace rsrc {
 		                 uint8_t attrs, const std::vector<uint8_t> &data);
 		bool removeResource(uint32_t type, int16_t id);
 		bool updateResource(const ResourceEntry &entry, const std::vector<uint8_t> &data);
+		bool updateResource(uint32_t type, int16_t id, const std::vector<uint8_t> &data);
 
 		// Serialize the resource file to bytes (for writing back to disk)
 		std::vector<uint8_t> serialize() const;
@@ -118,15 +119,42 @@ namespace rsrc {
 	// Platform-specific resource fork access
 
 	// Read the resource fork bytes for a given file path.
-	// On macOS: tries path/..namedfork/rsrc
-	// Falls back to AppleDouble sidecar (._basename)
-	// On other platforms: only tries AppleDouble sidecar
+	// On macOS: tries path/..namedfork/rsrc, falls back to AppleDouble sidecar
+	// On other platforms: reads from AppleDouble sidecar (._basename)
 	std::vector<uint8_t> readResourceFork(const std::string &path);
 
 	// Write resource fork bytes for a given file path.
 	// On macOS: writes to path/..namedfork/rsrc
-	// On other platforms: writes AppleDouble sidecar
+	// On other platforms: writes to AppleDouble sidecar (preserves other entries)
 	bool writeResourceFork(const std::string &path, const std::vector<uint8_t> &data);
+
+	// Get the resource fork size without reading the entire fork.
+	uint32_t resourceForkSize(const std::string &path);
+
+	// Read Finder Info (up to 32 bytes) from AppleDouble sidecar.
+	// Returns true if found, false otherwise. Buffer should be at least 32 bytes.
+	bool readFinderInfo(const std::string &path, void *buffer, size_t bufferSize);
+
+	// Write Finder Info (up to 32 bytes) to AppleDouble sidecar.
+	// Preserves other entries (e.g. resource fork) in the sidecar.
+	bool writeFinderInfo(const std::string &path, const void *info, size_t infoSize);
+
+	// Open a resource fork for fd-based I/O.
+	// On macOS: opens path/..namedfork/rsrc directly.
+	// On other platforms: extracts resource fork to a temp file and opens that.
+	// Returns the fd, or -1 on failure.
+	// After calling this, use lastTempPath() to get the temp file path (empty on macOS).
+	int openResourceFork(const std::string &path, int nativeFlags);
+
+	// Returns the temp file path from the last openResourceFork call.
+	// Empty string if the resource fork was opened natively (macOS).
+	std::string &lastTempPath();
+
+	// Close a resource fork fd. If tempPath is non-empty, reads the temp file
+	// contents back and writes them to the AppleDouble sidecar, then removes
+	// the temp file.
+	bool closeResourceFork(int fd, const std::string &originalPath,
+	                       const std::string &tempPath);
 
 } // namespace rsrc
 

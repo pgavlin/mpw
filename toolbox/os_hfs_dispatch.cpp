@@ -56,6 +56,7 @@
 #include "stackframe.h"
 #include "fs_spec.h"
 #include "path_utils.h"
+#include <rsrc/rsrc.h>
 
 #if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
 #define st_birthtime st_mtime
@@ -229,18 +230,11 @@ namespace OS {
 			memoryWriteWord(0, parm + _ioFlParID);
 			memoryWriteWord(0, parm + _ioFlClpSiz);
 
-			sname.append(_PATH_RSRCFORKSPEC);
-			if (::stat(sname.c_str(), &st) >= 0)
 			{
+				uint32_t rf = rsrc::resourceForkSize(sname);
 				memoryWriteWord(0, parm + _ioFlRStBlk);
-				memoryWriteLong(st.st_size, parm + _ioFlRLgLen);
-				memoryWriteLong(st.st_size, parm + _ioFlRPyLen);
-			}
-			else
-			{
-				memoryWriteWord(0, parm + _ioFlRStBlk);
-				memoryWriteLong(0, parm + _ioFlRLgLen);
-				memoryWriteLong(0, parm + _ioFlRPyLen);
+				memoryWriteLong(rf, parm + _ioFlRLgLen);
+				memoryWriteLong(rf, parm + _ioFlRPyLen);
 			}
 		}
 		return 0;

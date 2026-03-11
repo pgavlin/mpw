@@ -53,6 +53,7 @@
 #include "stackframe.h"
 #include "fs_spec.h"
 #include "path_utils.h"
+#include <rsrc/rsrc.h>
 
 
 using ToolBox::Log;
@@ -68,21 +69,22 @@ namespace {
 
 	uint32_t rforksize(const std::string &path)
 	{
+#ifdef __APPLE__
 		ssize_t rv;
-
 		rv = getxattr(path.c_str(), XATTR_RESOURCEFORK_NAME, nullptr, 0, 0, 0);
-		if (rv < 0) return 0;
-		return rv;
+		if (rv >= 0) return rv;
+#endif
+		return rsrc::resourceForkSize(path);
 	}
 
 	uint32_t rforksize(int fd)
 	{
+#ifdef __APPLE__
 		ssize_t rv;
-
 		rv = fgetxattr(fd, XATTR_RESOURCEFORK_NAME, nullptr, 0, 0, 0);
-		if (rv < 0) return 0;
-		return rv;
-
+		if (rv >= 0) return rv;
+#endif
+		return 0;
 	}
 
 }

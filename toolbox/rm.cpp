@@ -880,6 +880,15 @@ namespace RM
 		auto *of = findOpenFile(iter->second.refNum);
 		if (!of) return SetResError(MacOS::resFNotFound);
 
+		// Re-read handle data and update the resource file's internal copy,
+		// since the app may have modified the handle contents.
+		auto info = MM::GetHandleInfo(theResource);
+		if (!info.error() && info->size > 0) {
+			std::vector<uint8_t> resData(info->size);
+			std::memcpy(resData.data(), memoryPointer(info->address), info->size);
+			of->file->updateResource(iter->second.type, iter->second.id, resData);
+		}
+
 		of->dirty = true;
 
 		return SetResError(0);

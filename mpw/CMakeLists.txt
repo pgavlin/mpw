@@ -20,3 +20,4 @@ set_source_files_properties(
 )
 
 add_library(MPW_LIB ${MPW_SRC})
+target_link_libraries(MPW_LIB RSRC_LIB)
