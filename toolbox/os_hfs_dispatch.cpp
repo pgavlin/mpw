@@ -34,9 +34,8 @@
 #include <string>
 #include <cstring>
 
-#include <sys/xattr.h>
 #include <sys/stat.h>
-#include <sys/paths.h>
+#include <macos_compat.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -58,7 +57,7 @@
 #include "fs_spec.h"
 #include "path_utils.h"
 
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
+#if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
 #define st_birthtime st_mtime
 #endif
 
@@ -400,7 +399,7 @@ namespace OS {
 					if (!strcmp(dir->d_name, ".")) continue;
 					if (!strcmp(dir->d_name, "..")) continue;
 				}
-				if (dir->d_namlen > 255) continue;  // too long!
+				if (strlen(dir->d_name) > 255) continue;  // too long!
 				if (--ioFDirIndex == 0) break;
 			}
 

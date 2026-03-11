@@ -7,6 +7,14 @@ endif()
 
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Find editline/readline headers
+find_path(EDITLINE_INCLUDE_DIR readline/readline.h
+	PATHS /usr/include /usr/local/include /tmp/libedit-dev/usr/include
+)
+if(EDITLINE_INCLUDE_DIR)
+	include_directories("${EDITLINE_INCLUDE_DIR}")
+endif()
+
 add_custom_command(
 	OUTPUT lexer.cpp
 	COMMAND "${RAGEL}" -p -G2 -o lexer.cpp "${CMAKE_CURRENT_SOURCE_DIR}/lexer.rl"
@@ -68,7 +76,22 @@ target_link_libraries(mpw MPLITE_LIB)
 target_link_libraries(mpw MACOS_LIB)
 
 target_link_libraries(mpw RSRC_LIB)
-target_link_libraries(mpw -ledit)
+# Find libedit or readline
+find_library(EDITLINE_LIB NAMES edit
+	PATHS /usr/lib /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu /usr/local/lib
+)
+if(NOT EDITLINE_LIB)
+	# Fall back to linking by path to the .so.2 if the dev symlink is missing
+	find_file(EDITLINE_SO NAMES libedit.so.2
+		PATHS /usr/lib /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu
+	)
+	if(EDITLINE_SO)
+		set(EDITLINE_LIB "${EDITLINE_SO}")
+	else()
+		set(EDITLINE_LIB "-ledit")
+	endif()
+endif()
+target_link_libraries(mpw ${EDITLINE_LIB})
 
 add_executable(disasm disasm.cpp)
 target_link_libraries(disasm CPU_LIB)

@@ -24,6 +24,8 @@
  *
  */
 
+#include <cctype>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <cstdio>
@@ -31,8 +33,17 @@
 #include <sys/types.h>
 #include <limits.h>
 
+#ifndef digittoint
+static inline int digittoint(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return 0;
+}
+#endif
+
 namespace _loadtrap_rl {
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
+#if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
     #define _GETDELIM_GROWBY 128 /* amount to grow line buffer by */
     #define _GETDELIM_MINLEN 4 /* minimum line buffer size */
      
@@ -101,7 +112,7 @@ namespace _loadtrap_rl {
      
      
     ssize_t getline(char ** lineptr, size_t * n, FILE * stream) {
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
+#if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
         return getdelim(lineptr, n, '\n', stream);
 #else
         return ::getline(lineptr, n, stream);

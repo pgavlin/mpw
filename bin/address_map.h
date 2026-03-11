@@ -1,6 +1,8 @@
 #ifndef __address_map__
 #define __address_map__
 
+#include <cstddef>
+#include <cstdint>
 #include <unordered_map>
 #include <array>
 

@@ -1,6 +1,7 @@
 #ifndef __debug_template_h__
 #define __debug_template_h__
 
+#include <cstdint>
 #include <unordered_map>
 #include <string>
 

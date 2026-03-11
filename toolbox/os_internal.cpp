@@ -39,11 +39,8 @@
 
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/xattr.h>
-#include <sys/attr.h>
-#include <sys/paths.h>
-
-#include <machine/endian.h>
+#include <sys/time.h>
+#include <macos_compat.h>
 
 using ToolBox::Log;
 using MacOS::macos_error_from_errno;

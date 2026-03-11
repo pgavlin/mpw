@@ -32,9 +32,8 @@
 #include <deque>
 #include <string>
 
-#include <sys/xattr.h>
 #include <sys/stat.h>
-#include <sys/paths.h>
+#include <macos_compat.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -126,6 +125,7 @@ namespace OS
 	{
 
 		// 1. check for a TEXT file type.
+#ifdef __APPLE__
 		{
 			int rv;
 			char buffer[32];
@@ -134,6 +134,7 @@ namespace OS
 			if (rv >= 8 && memcmp(buffer, "TEXT", 4) == 0)
 				return true;
 		}
+#endif
 
 		std::string ext = extension(s);
 		if (ext.empty()) return false;
@@ -233,6 +234,7 @@ namespace OS
 	{
 
 		// first -- check for a finder info extension.
+#ifdef __APPLE__
 		{
 			uint8_t buffer[32];
 			int rv;
@@ -256,6 +258,7 @@ namespace OS
 				}
 			}
 		}
+#endif
 
 		std::string ext = extension(s);
 		if (ext.empty()) return false;

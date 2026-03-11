@@ -40,7 +40,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdlib.h>
-#include <sys/paths.h>
+#include <macos_compat.h>
 
 #include <cpu/defs.h>
 #include <cpu/fmem.h>

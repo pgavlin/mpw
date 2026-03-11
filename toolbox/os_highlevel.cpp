@@ -33,9 +33,8 @@
 #include <string>
 #include <cstring>
 
-#include <sys/xattr.h>
 #include <sys/stat.h>
-#include <sys/paths.h>
+#include <macos_compat.h>
 
 
 #include <stdlib.h>

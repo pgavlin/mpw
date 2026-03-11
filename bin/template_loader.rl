@@ -1,6 +1,7 @@
 
 #include <string>
 #include <cstddef>
+#include <cstdint>
 #include <unordered_map>
 #include <algorithm>
 #include <numeric>

@@ -32,9 +32,8 @@
 #include <deque>
 #include <string>
 
-#include <sys/xattr.h>
 #include <sys/stat.h>
-#include <sys/paths.h>
+#include <macos_compat.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -60,7 +59,7 @@ using ToolBox::Log;
 
 using MacOS::macos_error_from_errno;
 
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
+#if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
 #define st_birthtime st_mtime
 #endif
 

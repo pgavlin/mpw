@@ -1,6 +1,7 @@
 #ifndef __mpw_os_internal_h__
 #define __mpw_os_internal_h__
 
+#include <cstdint>
 #include <deque>
 #include <string>
 #include <sys/types.h>
