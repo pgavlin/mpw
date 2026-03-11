@@ -30,6 +30,7 @@ include_directories("${CMAKE_SOURCE_DIR}")
 
 add_subdirectory(bin)
 add_subdirectory(cpu)
+add_subdirectory(rsrc)
 add_subdirectory(toolbox)
 add_subdirectory(mplite)
 add_subdirectory(mpw)

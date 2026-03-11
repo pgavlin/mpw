@@ -31,7 +31,7 @@
 
 #include <string>
 
-#include <CoreServices/CoreServices.h>
+#include <rsrc/rsrc.h>
 
 #include <cpu/defs.h>
 #include <cpu/fmem.h>
@@ -225,10 +225,7 @@ void disasm(const char *name, int segment, uint32_t data_size)
 
 int main(int argc, char **argv)
 {
-
-	ResFileRefNum refNum;
-	FSRef ref;
-	Handle h;
+	const uint32_t kCODE = 0x434f4445;
 
 	if (argc != 2)
 	{
@@ -236,73 +233,65 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	assert( FSPathMakeRef( (const UInt8 *)argv[1], &ref, NULL) == noErr);
+	auto forkData = rsrc::readResourceFork(argv[1]);
+	if (forkData.empty())
+	{
+		fprintf(stderr, "Unable to open resource fork for %s\n", argv[1]);
+		return -1;
+	}
 
-    refNum = FSOpenResFile(&ref, fsRdPerm);
-    assert(refNum != -1 );
-    //UseResFile(refNum);
-
+	auto rf = rsrc::ResourceFile::open(forkData);
+	if (!rf)
+	{
+		fprintf(stderr, "Unable to parse resource fork for %s\n", argv[1]);
+		return -1;
+	}
 
 	cpuSetModel(3, 0); // 68030
 
-	int l = Count1Resources('CODE');
+	int l = rf->countResources(kCODE);
 
 	for (int i = 0; i < l; ++i)
 	{
-		ResAttributes attr;
-		ResID resID;
-		ResType resType;
-		Str255 name;
-		std::string cname;
+		const rsrc::ResourceEntry *entry = rf->getIndResource(kCODE, i + 1);
+		if (!entry) continue;
 
-		h = Get1IndResource('CODE', i + 1);
-		if (!h) continue;
-		HLock(h);
+		auto resData = rf->loadResource(*entry);
+		if (resData.empty()) continue;
 
-
-		attr = GetResAttrs(h);
-		GetResInfo(h, &resID, &resType, name);
-
-		// name is a p-string.
-		if (name[0])
-		{
-			int l = name[0];
-			cname.assign(name + 1, name + 1 + l);
-		}
-
-		uint32_t size = GetHandleSize(h);
-		uint8_t *data = *( uint8_t **)h;
+		int16_t resID = entry->id;
+		std::string cname = entry->name;
+		uint32_t size = resData.size();
+		const uint8_t *data = resData.data();
 
 		if (resID == 0)
 		{
-			memorySetMemory(data, size);
+			memorySetMemory(const_cast<uint8_t*>(data), size);
 			code0(size);
 		}
 		else
 		{
+			const uint8_t *codeData = data;
+			uint32_t codeSize = size;
+
 			// near model uses a $4-byte header.
 			// far model uses a $28-byte header.
-			if (data[0] == 0xff && data[1] == 0xff)
+			if (codeData[0] == 0xff && codeData[1] == 0xff)
 			{
-				data += 0x28;
-				size -= 0x28;
+				codeData += 0x28;
+				codeSize -= 0x28;
 			}
 			else
 			{
-				data += 0x04;
-				size -= 0x04;
+				codeData += 0x04;
+				codeSize -= 0x04;
 			}
-			memorySetMemory(data, size);
-			disasm(cname.c_str(), resID, size);
+			memorySetMemory(const_cast<uint8_t*>(codeData), codeSize);
+			disasm(cname.c_str(), resID, codeSize);
 		}
 
 		memorySetMemory(nullptr, 0);
-
-		ReleaseResource(h);
 	}
-
-
-    CloseResFile(refNum);
 
     return 0;
 }
