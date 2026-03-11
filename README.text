@@ -5,7 +5,7 @@ by Kelvin W Sherlock, et alia.
 
 0. System compatibility
 
-Currently, only OS X 10.8 with case-insensitive HFS+ is supported.
+macOS 10.8+ is supported. Both case-sensitive and case-insensitive filesystems (HFS+, APFS) work correctly.
 
 1. License
 

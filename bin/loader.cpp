@@ -42,9 +42,12 @@
 #include <cpu/CpuModule.h>
 #include <cpu/fmem.h>
 
+extern "C" void cpuSetRaiseInterrupt(BOOLE raise_irq);
+
 #include <toolbox/toolbox.h>
 #include <toolbox/mm.h>
 #include <toolbox/os.h>
+#include <toolbox/path_utils.h>
 #include <toolbox/loader.h>
 
 #include <mpw/mpw.h>
@@ -382,13 +385,23 @@ bool parse_number(const char *input, uint32_t *dest)
 bool file_exists(const std::string & name)
 {
 	struct stat st;
+	std::string resolved = OS::resolve_path_ci(name);
+	return ::stat(resolved.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
 
-	return ::stat(name.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+std::string find_file(const std::string &name)
+{
+	struct stat st;
+	std::string resolved = OS::resolve_path_ci(name);
+	if (::stat(resolved.c_str(), &st) == 0 && S_ISREG(st.st_mode))
+		return resolved;
+	return std::string();
 }
 
 std::string old_find_exe(const std::string &name)
 {
-	if (file_exists(name)) return name;
+	std::string found = find_file(name);
+	if (!found.empty()) return found;
 
 	// if name is a path, then it doesn't exist.
 	if (name.find('/') != name.npos) return std::string();
@@ -401,9 +414,7 @@ std::string old_find_exe(const std::string &name)
 	path.append("Tools/");
 	path.append(name);
 
-	if (file_exists(path)) return path;
-
-	return std::string();
+	return find_file(path);
 
 }
 
@@ -416,13 +427,11 @@ std::string find_exe(const std::string &name)
 
 	if (name.find(':') != name.npos) {
 		std::string path = ToolBox::MacToUnix(name);
-		if (file_exists(path)) return path;
-		return "";
+		return find_file(path);
 	}
 
 	if (name.find('/') != name.npos) {
-		if (file_exists(name)) return name;
-		return "";
+		return find_file(name);
 	}
 
 	// otherwise, check the Commands variable for locations.
@@ -442,7 +451,8 @@ std::string find_exe(const std::string &name)
 		// should always have a length...
 		if (path.length() && path.back() != '/') path.push_back('/');
 		path.append(name);
-		if (file_exists(path)) return path;
+		std::string found = find_file(path);
+		if (!found.empty()) return found;
 	}
 
 	return "";
@@ -685,6 +695,7 @@ int main(int argc, char **argv)
 
 
 	cpuStartup();
+	cpuSetRaiseInterrupt(FALSE);
 	cpuSetModel(3,0);
 
 	CreateStack();

@@ -49,6 +49,7 @@
 #include <toolbox/toolbox.h>
 #include <toolbox/os.h>
 #include <toolbox/os_internal.h>
+#include <toolbox/path_utils.h>
 
 #include <macos/errors.h>
 
@@ -128,6 +129,7 @@ namespace MPW
 		int rv;
 
 		sname = ToolBox::ReadCString(name, true);
+		sname = OS::resolve_path_ci(sname);
 
 		Log("     delete(%s)\n", sname.c_str());
 
@@ -146,6 +148,8 @@ namespace MPW
 
 		sname = ToolBox::ReadCString(src, true);
 		dname = ToolBox::ReadCString(dest, true);
+		sname = OS::resolve_path_ci(sname);
+		dname = OS::resolve_path_ci(dname, false);
 
 		Log("     rename(%s, %s)\n", sname.c_str(), dname.c_str());
 		rv = rename(sname.c_str(), dname.c_str());
@@ -230,10 +234,11 @@ namespace MPW
 
 
 		sname = ToolBox::ReadCString(name, true);
-		std::string xname = sname;
 
 		Log("     open(%s, %04x)\n", sname.c_str(), f.flags);
 
+		bool creating = (nativeFlags & O_CREAT) != 0;
+		sname = OS::resolve_path_ci(sname, !creating);
 
 		if (f.flags & kO_RSRC) {
 
@@ -245,13 +250,14 @@ namespace MPW
 			fd = -1;
 			if (parent >= 0) {
 
-				sname.append(_PATH_RSRCFORKSPEC);
+				std::string rsrcname = sname;
+				rsrcname.append(_PATH_RSRCFORKSPEC);
 
 				nativeFlags &= ~O_EXCL;
-				// APFS, etc - resource fork doesn't automatically exist so 
+				// APFS, etc - resource fork doesn't automatically exist so
 				// need O_CREAT.
 				if ((nativeFlags & O_ACCMODE) != O_RDONLY) nativeFlags |= O_CREAT;
-				fd = ::open(sname.c_str(), nativeFlags, 0666);
+				fd = ::open(rsrcname.c_str(), nativeFlags, 0666);
 				close(parent);
 			}
 
@@ -283,7 +289,7 @@ namespace MPW
 
 			if (f.flags & kO_RSRC) f.flags |= kO_BINARY;
 
-			auto &e = OS::Internal::FDEntry::allocate(fd, std::move(xname));
+			auto &e = OS::Internal::FDEntry::allocate(fd, std::move(sname));
 			e.text = !(f.flags & kO_BINARY);
 			e.resource = f.flags & kO_RSRC;
 		}

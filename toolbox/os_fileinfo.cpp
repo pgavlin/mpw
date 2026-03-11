@@ -53,6 +53,7 @@
 #include "toolbox.h"
 #include "stackframe.h"
 #include "fs_spec.h"
+#include "path_utils.h"
 
 
 using ToolBox::Log;
@@ -157,6 +158,7 @@ namespace OS {
 				sname = FSSpecManager::ExpandPath(sname, ioDirID);
 			}
 
+			sname = OS::resolve_path_ci(sname);
 			Log("     GetFileInfo(%s)\n", sname.c_str());
 
 
@@ -281,6 +283,7 @@ namespace OS {
 			sname = FSSpecManager::ExpandPath(sname, ioDirID);
 		}
 
+		sname = OS::resolve_path_ci(sname);
 		Log("     SetFileInfo(%s)\n", sname.c_str());
 
 

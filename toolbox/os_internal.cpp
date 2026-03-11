@@ -27,6 +27,7 @@
 #include "os_internal.h"
 #include "os.h"
 #include "toolbox.h"
+#include "path_utils.h"
 
 #include <macos/errors.h>
 
@@ -547,7 +548,8 @@ namespace OS { namespace Internal {
 				break;
 		}
 
-		std::string xname = filename;
+		std::string resolved = OS::resolve_path_ci(filename);
+		std::string xname = resolved;
 		if (fork) {
 			xname.append(_PATH_RSRCFORKSPEC);
 			// O_RDWR should also O_CREAT
@@ -575,7 +577,7 @@ namespace OS { namespace Internal {
 
 		// allocate the fd entry
 
-		auto &e = OS::Internal::FDEntry::allocate(fd, filename);
+		auto &e = OS::Internal::FDEntry::allocate(fd, resolved);
 		e.resource = fork;
 		e.text = fork ? false : IsTextFile(filename);
 

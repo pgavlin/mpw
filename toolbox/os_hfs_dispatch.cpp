@@ -56,6 +56,7 @@
 #include "toolbox.h"
 #include "stackframe.h"
 #include "fs_spec.h"
+#include "path_utils.h"
 
 #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
 #define st_birthtime st_mtime
@@ -173,6 +174,7 @@ namespace OS {
 
 		struct stat st;
 
+		sname = OS::resolve_path_ci(sname);
 		if (::stat(sname.c_str(), &st) < 0)
 		{
 			return macos_error_from_errno();
@@ -497,6 +499,7 @@ namespace OS {
 			sname = FSSpecManager::ExpandPath(sname, ioDirID);
 		}
 
+		sname = OS::resolve_path_ci(sname);
 		Log("     PBSetCatInfo(%s)\n", sname.c_str());
 
 

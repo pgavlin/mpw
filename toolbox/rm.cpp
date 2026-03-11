@@ -39,6 +39,7 @@
 #include "toolbox.h"
 #include "mm.h"
 #include "os_internal.h"
+#include "path_utils.h"
 
 #include <cpu/defs.h>
 #include <cpu/CpuModule.h>
@@ -124,7 +125,8 @@ namespace RM
 		{
 			outRefNum = -1;
 
-			auto data = rsrc::readResourceFork(path);
+			std::string resolved = OS::resolve_path_ci(path);
+			auto data = rsrc::readResourceFork(resolved);
 			if (data.empty())
 				return SetResError(MacOS::resFNotFound);
 
@@ -437,9 +439,10 @@ namespace RM
 
 		if (path.empty()) return MacOS::paramErr;
 
+		std::string resolved = OS::resolve_path_ci(path, false);
 		int fd;
 
-		fd = ::open(path.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
+		fd = ::open(resolved.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
 		if (fd < 0)
 		{
 			if (errno != EEXIST) return macos_error_from_errno();
@@ -447,19 +450,19 @@ namespace RM
 		else
 		{
 			if (creator || fileType)
-				OS::Internal::SetFinderInfo(path, fileType, creator);
+				OS::Internal::SetFinderInfo(resolved, fileType, creator);
 
 			close(fd);
 		}
 
 		// Check if resource fork already exists
-		auto existing = rsrc::readResourceFork(path);
+		auto existing = rsrc::readResourceFork(resolved);
 		if (!existing.empty())
 			return MacOS::dupFNErr;
 
 		// Create empty resource fork
 		auto emptyFork = rsrc::ResourceFile::createEmpty();
-		if (!rsrc::writeResourceFork(path, emptyFork))
+		if (!rsrc::writeResourceFork(resolved, emptyFork))
 			return MacOS::ioErr;
 
 		return {};

@@ -57,6 +57,7 @@
 #include "toolbox.h"
 #include "stackframe.h"
 #include "fs_spec.h"
+#include "path_utils.h"
 
 using ToolBox::Log;
 using MacOS::macos_error_from_errno;
@@ -175,6 +176,7 @@ namespace OS {
 			ToolBox::WritePString(spec + 6, leaf);
 
 			struct stat st;
+			sname = OS::resolve_path_ci(sname);
 			int rv = ::stat(sname.c_str(), &st);
 			if (rv < 0) return macos_error_from_errno();
 		}
@@ -302,7 +304,7 @@ namespace OS {
 			return MacOS::dirNFErr;
 		}
 
-
+		sname = OS::resolve_path_ci(sname, false);
 		fd = ::open(sname.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
 
 		if (fd < 0)
@@ -346,6 +348,7 @@ namespace OS {
 
 		std::string sname = ReadFSSpec(spec);
 
+		sname = OS::resolve_path_ci(sname);
 		Log("     FSpDelete(%s)\n", sname.c_str());
 
 
@@ -385,6 +388,7 @@ namespace OS {
 		std::string path = FSSpecManager::PathForID(parentID);
 
 		path += leaf;
+		path = OS::resolve_path_ci(path);
 
 		Log("     ResolveAliasFile(%s)\n", path.c_str());
 

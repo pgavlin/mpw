@@ -10,7 +10,7 @@ Please check the [releases](https://github.com/ksherlock/mpw/releases) for compi
 
 ## System compatibility
 
-Currently, only OS X 10.8+ with case-insensitive HFS+ is supported.
+macOS 10.8+ is supported. Both case-sensitive and case-insensitive filesystems (HFS+, APFS) work correctly — the emulator performs case-insensitive path resolution at the application level.
 
 ## License
 
