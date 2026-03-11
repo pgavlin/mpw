@@ -1,4 +1,5 @@
 #include "path_utils.h"
+#include "toolbox.h"
 
 #include <sys/stat.h>
 #include <dirent.h>
@@ -44,14 +45,26 @@ namespace OS {
 	}
 
 	std::string resolve_path_ci(const std::string &path, bool resolve_leaf) {
+		using ToolBox::Log;
+
 		if (path.empty()) return path;
+
+		Log("resolve_path_ci(\"%s\", resolve_leaf=%s)\n",
+			path.c_str(), resolve_leaf ? "true" : "false");
 
 		// Fast path: try the path as-is.
 		struct stat st;
 		if (resolve_leaf) {
-			if (::stat(path.c_str(), &st) == 0) return path;
+			if (::stat(path.c_str(), &st) == 0) {
+				Log("  fast path: exact match\n");
+				return path;
+			}
 			// If the error is not "not found", case-insensitive search won't help.
-			if (errno != ENOENT) return path;
+			if (errno != ENOENT) {
+				Log("  fast path: stat error %d (not ENOENT), returning as-is\n", errno);
+				return path;
+			}
+			Log("  fast path: ENOENT, trying case-insensitive resolve\n");
 		}
 
 		auto components = split_path(path);
@@ -69,11 +82,13 @@ namespace OS {
 			if (::stat(candidate.c_str(), &st) == 0) {
 				// Exact match exists.
 				resolved = candidate + "/";
+				Log("  [%zu] \"%s\" exact match\n", i, comp.c_str());
 				continue;
 			}
 
 			if (errno != ENOENT) {
 				// Permission error or similar — can't recover.
+				Log("  [%zu] \"%s\" stat error %d, giving up\n", i, comp.c_str(), errno);
 				return path;
 			}
 
@@ -81,9 +96,12 @@ namespace OS {
 			std::string match = find_entry_ci(resolved.empty() ? "." : resolved, comp);
 			if (match.empty()) {
 				// Truly doesn't exist, even case-insensitively.
+				Log("  [%zu] \"%s\" no ci match in \"%s\", giving up\n",
+					i, comp.c_str(), resolved.empty() ? "." : resolved.c_str());
 				return path;
 			}
 
+			Log("  [%zu] \"%s\" -> \"%s\" (ci match)\n", i, comp.c_str(), match.c_str());
 			resolved += match + "/";
 		}
 
@@ -94,10 +112,11 @@ namespace OS {
 
 		// Append the unresolved leaf for create paths.
 		if (!resolve_leaf && !components.empty()) {
-			if (resolved.empty() || resolved.back() != '/') resolved += "/";
+			if (!resolved.empty() && resolved.back() != '/') resolved += "/";
 			resolved += components.back();
 		}
 
+		Log("  resolved: \"%s\"\n", resolved.c_str());
 		return resolved;
 	}
 
