@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MPW (Macintosh Programmer's Workshop) Emulator — emulates the MPW command-line environment and Motorola 68000 CPU, allowing classic Mac MPW tools to run on modern macOS. Requires libedit for the debugger.
+MPW (Macintosh Programmer's Workshop) Emulator — emulates the MPW command-line environment and Motorola 68000 CPU, allowing classic Mac MPW tools to run on modern macOS and Linux. Requires libedit for the debugger.
 
 ## Build Commands
 
@@ -38,9 +38,13 @@ The emulator has five main layers:
 
 - **`macos/`** — System-level definitions: trap tables (`traps.c`), system equates (`sysequ.c`), error codes (`errors.cpp`).
 
-- **`bin/`** — Executable entry points. `loader.cpp` loads MPW executables. `debugger.cpp` provides an interactive debugger with breakpoints and memory inspection. Command parsing uses Ragel (lexer) + Lemon (parser).
+- **`bin/`** — Executable entry points. `loader.cpp` loads MPW executables. `debugger.cpp` provides an interactive debugger with breakpoints and memory inspection. Command parsing uses Ragel (lexer) + Lemon (parser). Also contains Python scripts for HFS disk image tooling (`setup_mpw.py`, `package_hfs.py`).
 
 **`rsrc/`** — Standalone Mac resource fork parser and accessor. Reads resource forks via `path/..namedfork/rsrc` on macOS or AppleDouble sidecar files on other platforms. No Apple framework dependencies.
+
+**`macos_compat.h`** — Cross-platform compatibility header. Abstracts macOS-specific APIs (endianness macros, xattr signatures, `setattrlist`) for Linux portability.
+
+**`toolbox/path_utils.cpp`** — Case-insensitive path resolution. Bridges the gap between case-insensitive Mac paths and case-sensitive Unix filesystems.
 
 **`mplite/`** — Vendored zero-alloc memory pool allocator (from SQLite/mempoolite), used by the Memory Manager.
 

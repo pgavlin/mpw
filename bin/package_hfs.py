@@ -2,9 +2,9 @@
 """
 Package a directory tree into an HFS disk image.
 
-Reads AppleDouble sidecar files (._name) for resource forks and Finder Info.
-Produces a raw HFS disk image (.img) suitable for use with emulators or
-classic Mac utilities.
+Reads resource forks and Finder Info from AppleDouble sidecar files (._name)
+on any platform, and from native xattrs/named forks on macOS. Produces a raw
+HFS disk image (.img) suitable for use with emulators or classic Mac utilities.
 """
 
 import argparse
@@ -599,7 +599,10 @@ class HFSImageBuilder:
 # ---------------------------------------------------------------------------
 
 def scan_directory(root_path):
-    """Scan a directory tree, reading AppleDouble sidecars.
+    """Scan a directory tree for files with their resource forks and Finder Info.
+
+    Checks AppleDouble sidecars (._name) first, then falls back to native
+    macOS resource forks (..namedfork/rsrc) and xattrs (com.apple.FinderInfo).
 
     Yields (path_parts, data_fork, rsrc_fork, finder_type, finder_creator).
     """
@@ -647,12 +650,19 @@ def scan_directory(root_path):
                         pass
                 if finder_type == b'\x00\x00\x00\x00':
                     try:
-                        import xattr
-                        fi = xattr.getxattr(filepath, 'com.apple.FinderInfo')
-                        if len(fi) >= 8:
+                        import ctypes
+                        import ctypes.util
+                        _libc = ctypes.CDLL(ctypes.util.find_library('c'))
+                        _buf = ctypes.create_string_buffer(32)
+                        _ret = _libc.getxattr(
+                            filepath.encode('utf-8'),
+                            b'com.apple.FinderInfo',
+                            _buf, 32, 0, 0)
+                        if _ret >= 8:
+                            fi = _buf.raw[:_ret]
                             finder_type = fi[0:4]
                             finder_creator = fi[4:8]
-                    except (ImportError, OSError, KeyError):
+                    except (OSError, AttributeError):
                         pass
 
             yield dir_parts + [fname], data_fork, rsrc_fork, \

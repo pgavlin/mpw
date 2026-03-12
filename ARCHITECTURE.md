@@ -1,12 +1,13 @@
 # MPW Emulator — Architecture
 
-MPW (Macintosh Programmer's Workshop) was Apple's command-line development environment for classic Mac OS. This emulator runs MPW tools (compilers, linkers, assemblers) on modern macOS by emulating both the Motorola 68030 CPU and the Mac OS Toolbox APIs they depend on.
+MPW (Macintosh Programmer's Workshop) was Apple's command-line development environment for classic Mac OS. This emulator runs MPW tools (compilers, linkers, assemblers) on modern macOS and Linux by emulating both the Motorola 68030 CPU and the Mac OS Toolbox APIs they depend on.
 
 ## Directory Structure
 
 ```
 mpw/
-├── bin/          Entry points: emulator (loader.cpp), disassembler, debugger
+├── bin/          Entry points: emulator (loader.cpp), disassembler, debugger,
+│                 plus Python scripts for HFS image tooling
 ├── cpu/          Motorola 680x0 CPU emulation (from WinFellow)
 ├── toolbox/      Macintosh Toolbox/OS trap implementations (~40 files)
 ├── mpw/          MPW environment emulation (file I/O, env vars, errno mapping)
@@ -15,6 +16,7 @@ mpw/
 ├── mplite/       Vendored memory pool allocator (from SQLite/mempoolite)
 ├── libsane/      SANE floating-point library (git submodule)
 ├── cxx/          C++ utility code
+├── macos_compat.h  Cross-platform compatibility layer (endianness, xattr, etc.)
 └── test/         MPW-hosted test programs
 ```
 
@@ -209,14 +211,33 @@ F-line traps (`0xFxxx`) handle MPW-specific system calls:
 
 The I/O layer converts Mac-style colon-delimited paths to Unix paths and maps Mac OS error codes to errno values. stdin, stdout, and stderr are connected to the host terminal.
 
+## Cross-Platform Compatibility (`macos_compat.h`)
+
+A single header that abstracts platform-specific macOS APIs for Linux portability:
+
+- **Endianness macros** — maps Linux `<endian.h>` to macOS-style names (`BYTE_ORDER`, `BIG_ENDIAN`, `LITTLE_ENDIAN`).
+- **Extended attribute wrappers** — adapts the macOS 6-argument `getxattr`/`setxattr`/`fgetxattr` signatures to Linux's 4-argument versions, and defines xattr name constants (`com.apple.FinderInfo`, `com.apple.ResourceFork`).
+- **Resource fork path** — defines `_PATH_RSRCFORKSPEC` (`/..namedfork/rsrc`) on Linux where it doesn't exist natively.
+- **`setattrlist()` stub** — returns `ENOTSUP`, allowing callers to fall back to `utimes()`.
+
+This eliminates scattered `#ifdef __APPLE__` blocks throughout the codebase.
+
+## Case-Insensitive Path Resolution (`toolbox/path_utils.cpp`)
+
+Classic Mac paths are case-insensitive, but Unix filesystems are case-sensitive. `resolve_path_ci()` bridges this gap:
+
+1. **Fast path** — tries the path as-is via `stat()`; returns immediately if found.
+2. **Slow path** — on `ENOENT`, walks each directory component and performs a case-insensitive `readdir()` scan to find the actual on-disk casing.
+3. **Create mode** — when `resolve_leaf=false`, only resolves the directory portion, leaving the final component unresolved for file creation.
+
 ## Resource Fork Access (`rsrc/`)
 
 A standalone library with no Apple framework dependencies that reads and writes Mac resource forks.
 
 ### Platform Support
 
-- **macOS** — reads/writes via the named fork path: `path/..namedfork/rsrc`
-- **Other platforms** — reads/writes AppleDouble sidecar files (`._filename`)
+- **macOS** — reads/writes via the named fork path: `path/..namedfork/rsrc`, falling back to AppleDouble sidecars.
+- **Linux and other platforms** — reads/writes AppleDouble sidecar files (`._filename`). For writable access, extracts the resource fork to a temporary file and writes modifications back on close.
 
 ### Resource Fork Binary Format
 
@@ -246,6 +267,10 @@ Map section:
 ```
 
 All values are big-endian. Resource data loaded into emulator memory does not need byte-swapping since the emulated 68K CPU is also big-endian.
+
+### AppleDouble Sidecar Format
+
+On non-macOS platforms (and as a fallback on macOS), resource forks and Finder Info are stored in AppleDouble sidecar files named `._<filename>`. The accessor layer parses these files to extract entry ID 2 (resource fork) and entry ID 9 (Finder Info), and can update individual entries without clobbering others.
 
 ### API
 
@@ -296,6 +321,20 @@ An interactive debugger activated with the `--debugger` flag. Uses libedit/readl
 - **Backtrace** — circular buffer of recent CPU state for post-mortem analysis.
 
 Command parsing uses a Ragel-generated lexer (`debugger_lexer.rl`) and a Lemon-generated parser (`debugger_parser.lemon`).
+
+## HFS Disk Image Tooling (`bin/`)
+
+Two Python scripts support bootstrapping and packaging the MPW environment without platform-specific tools:
+
+### `setup_mpw.py` — Extract MPW from Disk Images
+
+Extracts MPW tools, interfaces, and libraries from classic Mac HFS disk images. Includes a from-scratch HFS parser that reads B-tree catalog and extents overflow structures directly from raw image bytes. Supports raw HFS, Apple Partition Map, MacBinary wrapping, and NDIF (DiskCopy 6.x with ADC decompression).
+
+Preserves resource forks and Finder Info: on macOS via xattr, on Linux via AppleDouble sidecar files.
+
+### `package_hfs.py` — Create HFS Disk Images
+
+The inverse of `setup_mpw.py`: builds valid HFS disk images from directory trees. Reads AppleDouble sidecars (or native resource forks on macOS) to preserve Mac metadata. Constructs complete HFS volumes including B-tree nodes, allocation block management, and Master Directory Blocks.
 
 ## Code Generation
 

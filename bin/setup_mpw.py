@@ -9,6 +9,8 @@ Preserves resource forks via xattr on macOS, AppleDouble sidecars elsewhere.
 
 import argparse
 import os
+import shutil
+import stat
 import struct
 import sys
 
@@ -666,25 +668,79 @@ MWCIncludes=${CIncludes}
 """
 
 
-def install_environment(output_dir):
-    """Copy or generate Environment.text into the output directory."""
-    dest = os.path.join(output_dir, 'Environment.text')
-    if os.path.exists(dest):
-        return
-
-    # Try to find the verbatim copy from the repo
+def install_verbatim_files(output_dir):
+    """Copy verbatim support files (Environment.text, Errors.text, etc.)
+    into the output directory. Skips files that already exist."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    repo_env = os.path.join(script_dir, '..', 'verbatim', 'Environment.text')
-    if os.path.isfile(repo_env):
-        with open(repo_env, 'rb') as f:
-            content = f.read()
-        with open(dest, 'wb') as f:
-            f.write(content)
-        return
+    verbatim_dir = os.path.join(script_dir, '..', 'verbatim')
 
-    # Fall back to embedded default
-    with open(dest, 'w') as f:
-        f.write(DEFAULT_ENVIRONMENT)
+    if os.path.isdir(verbatim_dir):
+        for name in os.listdir(verbatim_dir):
+            src = os.path.join(verbatim_dir, name)
+            if not os.path.isfile(src):
+                continue
+            dest = os.path.join(output_dir, name)
+            if os.path.exists(dest):
+                continue
+            with open(src, 'rb') as f:
+                content = f.read()
+            with open(dest, 'wb') as f:
+                f.write(content)
+
+    # Fall back to embedded default for Environment.text if not copied
+    env_dest = os.path.join(output_dir, 'Environment.text')
+    if not os.path.exists(env_dest):
+        with open(env_dest, 'w') as f:
+            f.write(DEFAULT_ENVIRONMENT)
+
+
+def install_tools(output_dir):
+    """Install mpw, disasm, and package_hfs.py into {output_dir}/bin.
+
+    Searches for the binaries in the build directory relative to the
+    source tree (../build/bin/) and also checks if they're installed
+    alongside this script. Copies package_hfs.py from the same directory
+    as this script.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    bin_dir = os.path.join(output_dir, 'bin')
+
+    # Install compiled binaries
+    binary_names = ['mpw', 'disasm']
+    search_dirs = [
+        os.path.join(script_dir, '..', 'build', 'bin'),
+        script_dir,
+    ]
+
+    installed = []
+    for name in binary_names:
+        for search_dir in search_dirs:
+            src = os.path.join(search_dir, name)
+            if os.path.isfile(src):
+                os.makedirs(bin_dir, exist_ok=True)
+                dest = os.path.join(bin_dir, name)
+                shutil.copy2(src, dest)
+                st = os.stat(dest)
+                os.chmod(dest, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                installed.append(name)
+                break
+
+    # Install Python scripts
+    for name in ['package_hfs.py']:
+        src = os.path.join(script_dir, name)
+        if os.path.isfile(src):
+            os.makedirs(bin_dir, exist_ok=True)
+            dest = os.path.join(bin_dir, name)
+            shutil.copy2(src, dest)
+            st = os.stat(dest)
+            os.chmod(dest, st.st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            installed.append(name)
+
+    if installed:
+        print(f"Installed tools: {', '.join(installed)} -> {bin_dir}")
+    else:
+        print("Note: mpw/disasm binaries not found. Build the project first,")
+        print("  then re-run setup or copy them manually.")
 
 
 # ---------------------------------------------------------------------------
@@ -767,7 +823,8 @@ def main():
 
         print(f"  Extracted {extracted} files from {vol.vol_name}")
 
-    install_environment(output_dir)
+    install_verbatim_files(output_dir)
+    install_tools(output_dir)
     print(f"\nMPW environment set up in {output_dir}")
     print(f"Set MPW={output_dir} to use with the emulator.")
 
