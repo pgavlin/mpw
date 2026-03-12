@@ -373,11 +373,6 @@ int openResourceFork(const std::string &path, int nativeFlags) {
 		std::string forkPath = path + "/..namedfork/rsrc";
 		int fd = ::open(forkPath.c_str(), nativeFlags, 0666);
 		if (fd >= 0) return fd;
-		// If O_CREAT was requested, try creating
-		if ((nativeFlags & O_CREAT) && errno == ENOENT) {
-			fd = ::open(forkPath.c_str(), nativeFlags | O_CREAT, 0666);
-			if (fd >= 0) return fd;
-		}
 	}
 #endif
 
