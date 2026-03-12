@@ -706,9 +706,10 @@ def install_tools(output_dir):
     bin_dir = os.path.join(output_dir, 'bin')
 
     # Install compiled binaries
-    binary_names = ['mpw', 'disasm']
+    binary_names = ['mpw', 'disasm', 'mpw-lsp']
     search_dirs = [
         os.path.join(script_dir, '..', 'build', 'bin'),
+        os.path.join(script_dir, '..', 'build', 'lsp'),
         script_dir,
     ]
 

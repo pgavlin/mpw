@@ -37,3 +37,4 @@ add_subdirectory(mpw)
 add_subdirectory(macos)
 
 add_subdirectory(libsane)
+add_subdirectory(lsp)
