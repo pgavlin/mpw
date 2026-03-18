@@ -143,6 +143,8 @@ namespace OS
 		switch(c)
 		{
 			case 'a':
+				if (ext == "a") // assembler
+					return true;
 				if (ext == "aii") // assembler
 					return true;
 				if (ext == "asm")
