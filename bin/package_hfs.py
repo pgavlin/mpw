@@ -438,7 +438,7 @@ class HFSImageBuilder:
 
         # Image layout
         total_alloc_blocks = offset + total_file_blocks
-        free_blocks = max(2, total_alloc_blocks // 20)
+        free_blocks = max(20, total_alloc_blocks // 10)
         total_alloc_blocks += free_blocks
 
         bitmap_bytes = (total_alloc_blocks + 7) // 8
