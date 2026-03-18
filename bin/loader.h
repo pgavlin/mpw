@@ -2,6 +2,7 @@
 #define __mpw_loader__
 
 #include <cstdint>
+#include <string>
 
 struct Settings {
 	Settings() {}
@@ -21,6 +22,9 @@ struct Settings {
 	bool debugger = false;
 
 	bool memoryStats = false;
+
+	bool profile = false;
+	std::string profileOutput;
 
 
 	// updated later.

@@ -17,7 +17,7 @@ mkdir build && cd build
 cmake ..
 make
 
-# Outputs: build/bin/mpw (emulator), build/bin/disasm (disassembler)
+# Outputs: build/bin/mpw (emulator), build/bin/disasm (disassembler), build/bin/mpw-lsp (LSP server)
 ```
 
 **Required tools:** cmake (3.1+), ragel (version 6), lemon, clang++ with C++11 support.
@@ -38,7 +38,9 @@ The emulator has five main layers:
 
 - **`macos/`** — System-level definitions: trap tables (`traps.c`), system equates (`sysequ.c`), error codes (`errors.cpp`).
 
-- **`bin/`** — Executable entry points. `loader.cpp` loads MPW executables. `debugger.cpp` provides an interactive debugger with breakpoints and memory inspection. Command parsing uses Ragel (lexer) + Lemon (parser). Also contains Python scripts for HFS disk image tooling (`setup_mpw.py`, `package_hfs.py`).
+- **`bin/`** — Executable entry points. `loader.cpp` loads MPW executables. `debugger.cpp` provides an interactive debugger with breakpoints and memory inspection. `profiler.cpp` generates callgrind-format execution traces (`--profile`). Command parsing uses Ragel (lexer) + Lemon (parser). Also contains Python scripts for HFS disk image tooling (`setup_mpw.py`, `package_hfs.py`).
+
+- **`lsp/`** — Language Server Protocol server for MPW development tools. Translates MPW compiler error output into standard LSP diagnostics for IDE integration.
 
 **`rsrc/`** — Standalone Mac resource fork parser and accessor. Reads resource forks via `path/..namedfork/rsrc` on macOS or AppleDouble sidecar files on other platforms. No Apple framework dependencies.
 

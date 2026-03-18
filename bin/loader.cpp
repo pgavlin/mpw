@@ -59,11 +59,13 @@ extern "C" void cpuSetRaiseInterrupt(BOOLE raise_irq);
 
 #include "loader.h"
 #include "debugger.h"
+#include "profiler.h"
 
 #include <cxx/string_splitter.h>
 
 
 Settings Flags;
+static Profiler *profiler = nullptr;
 
 const uint32_t kGlobalSize = 0x10000;
 // retained to make debugging easier.
@@ -332,6 +334,8 @@ void help()
 	printf(" --trace-toolbox     print toolbox calls\n");
 	printf(" --trace-mpw         print mpw calls\n");
 	printf(" --memory-stats      print memory usage information\n");
+	printf(" --profile           generate callgrind profiling output\n");
+	printf(" --profile-output=F  set profile output filename\n");
 	printf(" --ram=<number>      set the ram size.  Default=16M\n");
 	printf(" --stack=<number>    set the stack size.  Default=8K\n");
 	printf("\n");
@@ -495,6 +499,11 @@ void MainLoop()
 
 		if (cpuGetStop()) break; // will this also be set by an interrupt?
 
+		uint16_t opcode = 0;
+		if (profiler) {
+			opcode = ReadWord(Memory, pc);
+			profiler->beforeInstruction(pc, opcode);
+		}
 
 		#ifndef CPU_INSTRUCTION_LOGGING
 		if (Flags.traceCPU || Flags.traceMacsbug)
@@ -503,7 +512,11 @@ void MainLoop()
 		}
 		#endif
 
-		cycles += cpuExecuteInstruction();
+		uint32_t icycles = cpuExecuteInstruction();
+		cycles += icycles;
+
+		if (profiler)
+			profiler->afterInstruction(pc, icycles);
 	}
 
 	#if 0
@@ -528,6 +541,8 @@ int main(int argc, char **argv)
 		kTraceMPW,
 		kDebugger,
 		kMemoryStats,
+		kProfile,
+		kProfileOutput,
 		kShell,
 	};
 	static struct option LongOpts[] =
@@ -546,6 +561,8 @@ int main(int argc, char **argv)
 		{ "debugger", no_argument, NULL, kDebugger },
 
 		{ "memory-stats", no_argument, NULL, kMemoryStats },
+		{ "profile", no_argument, NULL, kProfile },
+		{ "profile-output", required_argument, NULL, kProfileOutput },
 
 		{ "help", no_argument, NULL, 'h' },
 		{ "version", no_argument, NULL, 'V' },
@@ -584,6 +601,14 @@ int main(int argc, char **argv)
 
 			case kMemoryStats:
 				Flags.memoryStats = true;
+				break;
+
+			case kProfile:
+				Flags.profile = true;
+				break;
+
+			case kProfileOutput:
+				Flags.profileOutput = optarg;
 				break;
 
 			case kDebugger:
@@ -732,6 +757,11 @@ int main(int argc, char **argv)
 		// else do it manually below.
 	}
 
+	if (Flags.profile) {
+		profiler = new Profiler();
+		profiler->initialize();
+	}
+
 	if (Flags.debugger) Debug::Shell();
 	else MainLoop();
 
@@ -742,10 +772,20 @@ int main(int argc, char **argv)
 		MM::Native::PrintMemoryStats();
 	}
 
+	if (profiler) {
+		std::string profileFile = Flags.profileOutput;
+		if (profileFile.empty()) {
+			char buf[64];
+			snprintf(buf, sizeof(buf), "callgrind.out.%d", getpid());
+			profileFile = buf;
+		}
+		profiler->writeOutput(profileFile);
+		delete profiler;
+		profiler = nullptr;
+	}
+
 	uint32_t rv = MPW::ExitStatus();
 	if (rv > 0xff) rv = 0xff;
-
-
 
 	exit(rv);
 }

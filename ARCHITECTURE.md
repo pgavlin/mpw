@@ -7,7 +7,8 @@ MPW (Macintosh Programmer's Workshop) was Apple's command-line development envir
 ```
 mpw/
 ├── bin/          Entry points: emulator (loader.cpp), disassembler, debugger,
-│                 plus Python scripts for HFS image tooling
+│                 profiler, plus Python scripts for HFS image tooling
+├── lsp/          Language Server Protocol server for MPW development tools
 ├── cpu/          Motorola 680x0 CPU emulation (from WinFellow)
 ├── toolbox/      Macintosh Toolbox/OS trap implementations (~40 files)
 ├── mpw/          MPW environment emulation (file I/O, env vars, errno mapping)
@@ -321,6 +322,68 @@ An interactive debugger activated with the `--debugger` flag. Uses libedit/readl
 - **Backtrace** — circular buffer of recent CPU state for post-mortem analysis.
 
 Command parsing uses a Ragel-generated lexer (`debugger_lexer.rl`) and a Lemon-generated parser (`debugger_parser.lemon`).
+
+## Profiler (`bin/profiler.cpp`)
+
+The `--profile` flag enables execution profiling, generating output in **callgrind format** viewable in KCachegrind/QCachegrind.
+
+### How It Works
+
+The profiler maintains a shadow call stack alongside the emulated CPU:
+
+1. **Before each instruction** — inspects the opcode to detect calls (JSR/BSR), returns (RTS/RTD), and A-line traps.
+2. **After each instruction** — attributes the cycle cost to the current function and instruction address, then updates the shadow stack:
+   - **JSR/BSR** — pushes a new frame with the target address and expected return address (read from the 68K stack).
+   - **RTS/RTD** — pops frames until the return address matches (handles longjmp by popping multiple frames).
+   - **A-line traps** — creates a synthetic frame for the trap, attributes cycles to it, and records a call arc from the calling function.
+
+### Symbol Resolution
+
+Function names come from three sources:
+- **MacsBug debug names** — embedded in CODE segments after RTS/JMP instructions, loaded via `Loader::Native::LoadDebugNames()`.
+- **Trap names** — A-line trap opcodes are resolved to names via `TrapName()` (e.g., `_NewHandle`, `_GetResource`).
+- **Fallback** — unknown functions are labeled `sub_XXXXXXXX`.
+
+### Output Format
+
+The callgrind output includes:
+- Per-instruction cycle counts (`positions: instr`, `events: Cycles`)
+- Function-level self and inclusive costs
+- Call arcs with call counts and inclusive callee costs
+
+```
+fn=MyFunction
+0x00012000 4
+0x00012004 8
+cfn=_NewHandle
+calls=1 0xA0000122
+0x00012004 120
+```
+
+### Usage
+
+```
+mpw --profile tool args...                    # writes callgrind.out.<pid>
+mpw --profile --profile-output=out.cg tool args...  # custom filename
+```
+
+When `--profile` is not set, the overhead is a single null pointer check per instruction.
+
+## LSP Server (`lsp/`)
+
+An LSP (Language Server Protocol) server that provides IDE integration for classic Mac development with MPW tools. It runs MPW compilers and translates their error output into standard LSP diagnostics.
+
+### Components
+
+| File | Purpose |
+|------|---------|
+| `transport.cpp` | JSON-RPC message framing over stdin/stdout |
+| `server.cpp` | LSP lifecycle (initialize, shutdown, textDocument/* handlers) |
+| `document_store.cpp` | Open document tracking |
+| `tool_runner.cpp` | Invokes MPW compilers and captures output |
+| `diagnostic_parser.cpp` | Parses MPW error format into LSP diagnostics |
+
+The server vendors `nlohmann/json` for JSON support. It is built as `bin/mpw-lsp`.
 
 ## HFS Disk Image Tooling (`bin/`)
 
