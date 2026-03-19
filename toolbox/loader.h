@@ -3,12 +3,20 @@
 
 #include <string>
 #include <map>
+#include <vector>
 
 #include <cstdint>
 
 namespace Loader {
 
 	typedef std::map<std::string, std::pair<uint32_t, uint32_t>> DebugNameTable;
+
+	struct CodeSegment {
+		uint16_t segmentNumber;
+		uint32_t address;
+		uint32_t size;
+	};
+
 	namespace Native {
 
 		/*
@@ -23,6 +31,9 @@ namespace Loader {
 		// scans segments for MacsBug debug names.
 		// associates them with the start of the segment.
 		void LoadDebugNames(DebugNameTable &table);
+
+		// returns info for all loaded CODE segments (excluding segment 0).
+		void LoadSegmentInfo(std::vector<CodeSegment> &segments);
 
 	}
 

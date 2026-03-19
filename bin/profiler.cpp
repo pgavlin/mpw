@@ -71,6 +71,9 @@ struct Profiler::Impl {
 	// addr -> end addr (if known)
 	std::map<uint32_t, uint32_t> addrToEnd;
 
+	// loaded CODE segments (excluding segment 0)
+	std::vector<Loader::CodeSegment> segments;
+
 	bool pendingCall = false;
 	bool pendingReturn = false;
 	bool pendingTrap = false;
@@ -190,6 +193,7 @@ Profiler::~Profiler() {
 void Profiler::initialize() {
 	Loader::DebugNameTable table;
 	Loader::Native::LoadDebugNames(table);
+	Loader::Native::LoadSegmentInfo(impl->segments);
 
 	for (auto &entry : table) {
 		uint32_t addr = entry.second.first;
@@ -311,8 +315,52 @@ void Profiler::writeOutput(const std::string &filename) {
 	fprintf(f, "positions: instr\n");
 	fprintf(f, "events: Cycles\n");
 	fprintf(f, "\n");
-	fprintf(f, "fl=CODE\n");
-	fprintf(f, "\n");
+
+	// build a segment lookup: sorted by address for binary search
+	// each entry maps an absolute address to a segment number and base offset
+	struct SegLookup {
+		uint32_t address;
+		uint32_t size;
+		uint16_t segmentNumber;
+	};
+	std::vector<SegLookup> segLookup;
+	for (auto &cs : impl->segments) {
+		segLookup.push_back({cs.address, cs.size, cs.segmentNumber});
+	}
+	std::sort(segLookup.begin(), segLookup.end(),
+		[](const SegLookup &a, const SegLookup &b) { return a.address < b.address; });
+
+	// convert an absolute PC to a segment-relative offset.
+	// returns the segment number (0 = unknown/trap) and sets offset.
+	auto toSegOffset = [&](uint32_t pc, uint32_t &offset) -> uint16_t {
+		// synthetic trap addresses pass through
+		if ((pc & 0xA0000000) == 0xA0000000) {
+			offset = pc;
+			return 0;
+		}
+		// binary search: find last segment with address <= pc
+		SegLookup key = {pc, 0, 0};
+		auto it = std::upper_bound(segLookup.begin(), segLookup.end(), key,
+			[](const SegLookup &a, const SegLookup &b) { return a.address < b.address; });
+		if (it != segLookup.begin()) {
+			--it;
+			if (pc >= it->address && pc < it->address + it->size) {
+				offset = pc - it->address;
+				return it->segmentNumber;
+			}
+		}
+		// not in any known segment - use absolute address
+		offset = pc;
+		return 0;
+	};
+
+	// helper to format the fl= name for a segment
+	auto segFileName = [](uint16_t seg) -> std::string {
+		if (seg == 0) return "TRAPS";
+		char buf[16];
+		snprintf(buf, sizeof(buf), "SEG_%u", seg);
+		return buf;
+	};
 
 	// collect all instruction PCs by function
 	// first, build a sorted list of function start addresses
@@ -356,43 +404,64 @@ void Profiler::writeOutput(const std::string &filename) {
 		funcInstr[func].push_back({pc, cy});
 	}
 
-	// emit each function
+	// determine the segment for each function
+	std::map<uint16_t, std::vector<uint32_t>> segToFuncs;
 	for (uint32_t funcAddr : funcAddrs) {
-		auto &fi = impl->functions[funcAddr];
-		fprintf(f, "fn=%s\n", fi.name.c_str());
+		uint32_t offset;
+		uint16_t seg = toSegOffset(funcAddr, offset);
+		segToFuncs[seg].push_back(funcAddr);
+	}
 
-		// sort instructions by address
-		auto &instrs = funcInstr[funcAddr];
-		std::sort(instrs.begin(), instrs.end());
+	// emit functions grouped by segment
+	for (auto &sf : segToFuncs) {
+		uint16_t seg = sf.first;
+		fprintf(f, "fl=%s\n", segFileName(seg).c_str());
 
-		for (auto &ip : instrs) {
-			fprintf(f, "0x%08X %llu\n", ip.first, (unsigned long long)ip.second);
-		}
+		for (uint32_t funcAddr : sf.second) {
+			auto &fi = impl->functions[funcAddr];
+			fprintf(f, "fn=%s\n", fi.name.c_str());
 
-		// emit call arcs from this function
-		for (auto &arcEntry : impl->callArcs) {
-			if (arcEntry.first.first != funcAddr) continue;
+			// sort instructions by address
+			auto &instrs = funcInstr[funcAddr];
+			std::sort(instrs.begin(), instrs.end());
 
-			uint32_t calleeAddr = arcEntry.first.second;
-			auto &arc = arcEntry.second;
-			auto &calleeFi = impl->functions[calleeAddr];
-
-			fprintf(f, "cfn=%s\n", calleeFi.name.c_str());
-			fprintf(f, "calls=%llu 0x%08X\n", (unsigned long long)arc.count, calleeAddr);
-
-			// find the call site PC - use the most common instruction in this function
-			// that precedes a call to the callee. For simplicity, use funcAddr as fallback.
-			uint32_t callSitePC = funcAddr;
-			// search instrCycles for the best match
 			for (auto &ip : instrs) {
-				// just use the first instruction as call site if we can't do better
-				callSitePC = ip.first;
-				break;
+				uint32_t offset;
+				toSegOffset(ip.first, offset);
+				fprintf(f, "0x%08X %llu\n", offset, (unsigned long long)ip.second);
 			}
-			fprintf(f, "0x%08X %llu\n", callSitePC, (unsigned long long)arc.inclusiveCost);
-		}
 
-		fprintf(f, "\n");
+			// emit call arcs from this function
+			for (auto &arcEntry : impl->callArcs) {
+				if (arcEntry.first.first != funcAddr) continue;
+
+				uint32_t calleeAddr = arcEntry.first.second;
+				auto &arc = arcEntry.second;
+				auto &calleeFi = impl->functions[calleeAddr];
+
+				// emit callee's file if it's in a different segment
+				uint32_t calleeOffset;
+				uint16_t calleeSeg = toSegOffset(calleeAddr, calleeOffset);
+				if (calleeSeg != seg) {
+					fprintf(f, "cfl=%s\n", segFileName(calleeSeg).c_str());
+				}
+
+				fprintf(f, "cfn=%s\n", calleeFi.name.c_str());
+				fprintf(f, "calls=%llu 0x%08X\n", (unsigned long long)arc.count, calleeOffset);
+
+				// use the first instruction in this function as call site
+				uint32_t callSitePC = funcAddr;
+				for (auto &ip : instrs) {
+					callSitePC = ip.first;
+					break;
+				}
+				uint32_t callSiteOffset;
+				toSegOffset(callSitePC, callSiteOffset);
+				fprintf(f, "0x%08X %llu\n", callSiteOffset, (unsigned long long)arc.inclusiveCost);
+			}
+
+			fprintf(f, "\n");
+		}
 	}
 
 	fclose(f);

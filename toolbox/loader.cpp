@@ -498,6 +498,21 @@ namespace Loader {
 
 
 
+		void LoadSegmentInfo(std::vector<Loader::CodeSegment> &segments)
+		{
+			segments.clear();
+			// skip segment 0 (jump table / A5 world)
+			for (unsigned i = 1; i < Segments.size(); ++i) {
+				const auto &si = Segments[i];
+				if (si.address == 0) continue;
+				Loader::CodeSegment cs;
+				cs.segmentNumber = i;
+				cs.address = si.address;
+				cs.size = si.size;
+				segments.push_back(cs);
+			}
+		}
+
 	} // Internal namespace
 
 
