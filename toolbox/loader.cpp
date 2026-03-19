@@ -505,10 +505,13 @@ namespace Loader {
 			for (unsigned i = 1; i < Segments.size(); ++i) {
 				const auto &si = Segments[i];
 				if (si.address == 0) continue;
+				// skip the CODE resource header to match disassembler offsets:
+				// near model has a 4-byte header, far model has a 0x28-byte header.
+				uint32_t hdrSize = si.farModel ? 0x28 : 0x04;
 				Loader::CodeSegment cs;
 				cs.segmentNumber = i;
-				cs.address = si.address;
-				cs.size = si.size;
+				cs.address = si.address + hdrSize;
+				cs.size = si.size - hdrSize;
 				segments.push_back(cs);
 			}
 		}
