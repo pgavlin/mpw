@@ -323,6 +323,15 @@ void Profiler::writeOutput(const std::string &filename) {
 	}
 	std::sort(funcAddrs.begin(), funcAddrs.end());
 
+	// build a complete sorted map of all known function start addresses
+	// (from both debug symbols and JSR targets discovered during execution)
+	std::map<uint32_t, uint32_t> allFuncAddrs;
+	for (auto &p : impl->functions) {
+		if ((p.first & 0xA0000000) != 0xA0000000) { // skip synthetic trap addrs
+			allFuncAddrs[p.first] = p.first;
+		}
+	}
+
 	// map each instruction PC to its function
 	std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, uint64_t>>> funcInstr;
 	for (auto &p : impl->instrCycles) {
@@ -335,8 +344,14 @@ void Profiler::writeOutput(const std::string &filename) {
 			continue;
 		}
 
-		uint32_t func = impl->findFunction(pc);
-		// if func is not in our functions table, create it
+		// find the function containing this PC using all known function addresses
+		uint32_t func = pc;
+		auto it = allFuncAddrs.upper_bound(pc);
+		if (it != allFuncAddrs.begin()) {
+			--it;
+			func = it->second;
+		}
+		// ensure the function has a name entry
 		impl->functionName(func);
 		funcInstr[func].push_back({pc, cy});
 	}
