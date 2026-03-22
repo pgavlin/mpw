@@ -28,8 +28,12 @@
 #include <cstdint>
 #include <cassert>
 #include <cctype>
+#include <cstring>
 
 #include <string>
+#include <vector>
+#include <map>
+#include <fstream>
 
 #include <rsrc/rsrc.h>
 
@@ -64,7 +68,14 @@ void ToolBox(uint32_t pc, uint16_t trap)
 
 void help()
 {
-
+	fprintf(stderr, "Usage: disasm [options] <file>\n");
+	fprintf(stderr, "Options:\n");
+	fprintf(stderr, "  --raw-drvr    Treat file as a raw DRVR resource\n");
+	fprintf(stderr, "  --raw         Treat file as raw 68K code\n");
+	fprintf(stderr, "  --raw-type <type> <id>\n");
+	fprintf(stderr, "                Treat file as a raw resource of given type/id\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "Without options, reads CODE resources from the file's resource fork.\n");
 }
 
 
@@ -147,7 +158,8 @@ inline char *cc2(uint16_t value, char out[3])
 	return out;
 }
 
-void disasm(const char *name, int segment, uint32_t data_size)
+void disasm(const char *name, int segment, uint32_t data_size,
+            const std::map<uint32_t, const char *> *labels = nullptr)
 {
 
 	if (name && *name) printf("segment %d - %s\n", segment, name);
@@ -160,6 +172,16 @@ void disasm(const char *name, int segment, uint32_t data_size)
 
 	while (pc < data_size)
 	{
+		// Print label if one exists at this address
+		if (labels)
+		{
+			auto it = labels->find(pc);
+			if (it != labels->end())
+			{
+				printf("\n; --- %s ---\n", it->second);
+			}
+		}
+
 		for (unsigned j = 0; j < 4; ++j) strings[j][0] = 0;
 
 		uint16_t op = memoryReadWord(pc);
@@ -223,31 +245,191 @@ void disasm(const char *name, int segment, uint32_t data_size)
 	printf("\n\n");
 }
 
+std::vector<uint8_t> readFile(const char *path)
+{
+	std::vector<uint8_t> data;
+	std::ifstream f(path, std::ios::binary | std::ios::ate);
+	if (!f) return data;
+	auto size = f.tellg();
+	f.seekg(0);
+	data.resize(size);
+	f.read(reinterpret_cast<char *>(data.data()), size);
+	return data;
+}
+
+uint16_t readBE16(const uint8_t *p) { return (p[0] << 8) | p[1]; }
+
+void disasmDRVR(const uint8_t *data, uint32_t size)
+{
+	if (size < 18)
+	{
+		fprintf(stderr, "DRVR resource too small\n");
+		return;
+	}
+
+	uint16_t drvrFlags  = readBE16(data + 0);
+	uint16_t drvrDelay  = readBE16(data + 2);
+	uint16_t drvrEMask  = readBE16(data + 4);
+	uint16_t drvrMenu   = readBE16(data + 6);
+	uint16_t drvrOpen   = readBE16(data + 8);
+	uint16_t drvrPrime  = readBE16(data + 10);
+	uint16_t drvrCtl    = readBE16(data + 12);
+	uint16_t drvrStatus = readBE16(data + 14);
+	uint16_t drvrClose  = readBE16(data + 16);
+
+	// Parse driver name (Pascal string at offset 18)
+	uint8_t nameLen = data[18];
+	std::string drvrName;
+	if (nameLen > 0 && 18 + 1 + nameLen <= size)
+	{
+		drvrName.assign(reinterpret_cast<const char *>(data + 19), nameLen);
+	}
+
+	printf("; ============================================================\n");
+	printf("; DRVR resource: \"%s\"\n", drvrName.c_str());
+	printf("; ============================================================\n");
+	printf(";\n");
+	printf("; drvrFlags:  $%04X\n", drvrFlags);
+	printf(";   dReadEnable:  %s\n", (drvrFlags & 0x4000) ? "yes" : "no");
+	printf(";   dWritEnable:  %s\n", (drvrFlags & 0x2000) ? "yes" : "no");
+	printf(";   dCtlEnable:   %s\n", (drvrFlags & 0x1000) ? "yes" : "no");
+	printf(";   dStatEnable:  %s\n", (drvrFlags & 0x0800) ? "yes" : "no");
+	printf(";   dNeedGoodBye: %s\n", (drvrFlags & 0x0400) ? "yes" : "no");
+	printf(";   dNeedTime:    %s\n", (drvrFlags & 0x0200) ? "yes" : "no");
+	printf(";   dNeedLock:    %s\n", (drvrFlags & 0x0100) ? "yes" : "no");
+	printf("; drvrDelay:  %u ticks\n", drvrDelay);
+	printf("; drvrEMask:  $%04X\n", drvrEMask);
+	printf("; drvrMenu:   %u\n", drvrMenu);
+	printf("; drvrOpen:   $%04X\n", drvrOpen);
+	printf("; drvrPrime:  $%04X\n", drvrPrime);
+	printf("; drvrCtl:    $%04X\n", drvrCtl);
+	printf("; drvrStatus: $%04X\n", drvrStatus);
+	printf("; drvrClose:  $%04X\n", drvrClose);
+	printf("; drvrName:   \"%s\"\n", drvrName.c_str());
+	printf(";\n");
+
+	// Build label map for entry points
+	std::map<uint32_t, const char *> labels;
+	if (drvrOpen)   labels[drvrOpen]   = "drvrOpen";
+	if (drvrPrime)  labels[drvrPrime]  = "drvrPrime";
+	if (drvrCtl)    labels[drvrCtl]    = "drvrCtl";
+	if (drvrStatus) labels[drvrStatus] = "drvrStatus";
+	if (drvrClose)  labels[drvrClose]  = "drvrClose";
+
+	// Disassemble the entire DRVR resource as code
+	memorySetMemory(const_cast<uint8_t *>(data), size);
+	disasm(drvrName.c_str(), 0, size, &labels);
+	memorySetMemory(nullptr, 0);
+}
+
+void disasmRaw(const uint8_t *data, uint32_t size)
+{
+	memorySetMemory(const_cast<uint8_t *>(data), size);
+	disasm("raw", 0, size);
+	memorySetMemory(nullptr, 0);
+}
+
 int main(int argc, char **argv)
 {
 	const uint32_t kCODE = 0x434f4445;
+	const uint32_t kDRVR = 0x44525652;
 
-	if (argc != 2)
+	enum Mode { MODE_RSRC, MODE_RAW_DRVR, MODE_RAW };
+	Mode mode = MODE_RSRC;
+	const char *filePath = nullptr;
+	uint32_t rsrcType = 0;
+
+	for (int i = 1; i < argc; ++i)
+	{
+		if (strcmp(argv[i], "--raw-drvr") == 0)
+		{
+			mode = MODE_RAW_DRVR;
+		}
+		else if (strcmp(argv[i], "--raw") == 0)
+		{
+			mode = MODE_RAW;
+		}
+		else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+		{
+			help();
+			return 0;
+		}
+		else if (argv[i][0] == '-')
+		{
+			fprintf(stderr, "Unknown option: %s\n", argv[i]);
+			help();
+			return -1;
+		}
+		else
+		{
+			filePath = argv[i];
+		}
+	}
+
+	if (!filePath)
 	{
 		help();
 		return -1;
 	}
 
-	auto forkData = rsrc::readResourceFork(argv[1]);
+	cpuSetModel(3, 0); // 68030
+
+	if (mode == MODE_RAW_DRVR)
+	{
+		auto data = readFile(filePath);
+		if (data.empty())
+		{
+			fprintf(stderr, "Unable to read file %s\n", filePath);
+			return -1;
+		}
+		disasmDRVR(data.data(), data.size());
+		return 0;
+	}
+
+	if (mode == MODE_RAW)
+	{
+		auto data = readFile(filePath);
+		if (data.empty())
+		{
+			fprintf(stderr, "Unable to read file %s\n", filePath);
+			return -1;
+		}
+		disasmRaw(data.data(), data.size());
+		return 0;
+	}
+
+	// Default: read CODE resources from resource fork
+	auto forkData = rsrc::readResourceFork(filePath);
 	if (forkData.empty())
 	{
-		fprintf(stderr, "Unable to open resource fork for %s\n", argv[1]);
+		fprintf(stderr, "Unable to open resource fork for %s\n", filePath);
 		return -1;
 	}
 
 	auto rf = rsrc::ResourceFile::open(forkData);
 	if (!rf)
 	{
-		fprintf(stderr, "Unable to parse resource fork for %s\n", argv[1]);
+		fprintf(stderr, "Unable to parse resource fork for %s\n", filePath);
 		return -1;
 	}
 
-	cpuSetModel(3, 0); // 68030
+	// Check for DRVR resources first, then CODE
+	int drvrCount = rf->countResources(kDRVR);
+	if (drvrCount > 0)
+	{
+		for (int i = 0; i < drvrCount; ++i)
+		{
+			const rsrc::ResourceEntry *entry = rf->getIndResource(kDRVR, i + 1);
+			if (!entry) continue;
+
+			auto resData = rf->loadResource(*entry);
+			if (resData.empty()) continue;
+
+			printf("; DRVR ID=%d\n", entry->id);
+			disasmDRVR(resData.data(), resData.size());
+		}
+		return 0;
+	}
 
 	int l = rf->countResources(kCODE);
 
