@@ -40,9 +40,9 @@
 
 #include <strings.h>
 
-#include <cpu/defs.h>
-#include <cpu/CpuModule.h>
-#include <cpu/fmem.h>
+#include <cpu/m68k/defs.h>
+#include <cpu/m68k/CpuModule.h>
+#include <cpu/m68k/fmem.h>
 
 #include <macos/sysequ.h>
 #include <macos/errors.h>

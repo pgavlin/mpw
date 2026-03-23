@@ -8,8 +8,8 @@
 #include <toolbox/os.h>
 #include <macos/errors.h>
 
-#include <cpu/defs.h>
-#include <cpu/CpuModule.h>
+#include <cpu/m68k/defs.h>
+#include <cpu/m68k/CpuModule.h>
 
 #include "debugger.h"
 #include "debugger_internal.h"

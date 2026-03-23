@@ -69,7 +69,7 @@ add_executable(mpw loader.cpp profiler.cpp debugger.cpp debugger_internal.cpp
 	template_loader.cpp template_parser.cpp intern.cpp template.cpp)
 
 
-target_link_libraries(mpw CPU_LIB)
+target_link_libraries(mpw M68K_LIB)
 target_link_libraries(mpw TOOLBOX_LIB)
 target_link_libraries(mpw MPW_LIB)
 target_link_libraries(mpw MPLITE_LIB)
@@ -94,7 +94,7 @@ endif()
 target_link_libraries(mpw ${EDITLINE_LIB})
 
 add_executable(disasm disasm.cpp)
-target_link_libraries(disasm CPU_LIB)
+target_link_libraries(disasm M68K_LIB)
 target_link_libraries(disasm MACOS_LIB)
 target_link_libraries(disasm RSRC_LIB)
 

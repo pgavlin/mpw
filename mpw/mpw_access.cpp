@@ -42,9 +42,9 @@
 #include <stdlib.h>
 #include <macos_compat.h>
 
-#include <cpu/defs.h>
-#include <cpu/fmem.h>
-#include <cpu/CpuModule.h>
+#include <cpu/m68k/defs.h>
+#include <cpu/m68k/fmem.h>
+#include <cpu/m68k/CpuModule.h>
 
 #include <toolbox/toolbox.h>
 #include <toolbox/os.h>

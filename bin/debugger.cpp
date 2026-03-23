@@ -52,8 +52,8 @@
 #include "debugger_internal.h"
 #include "template.h"
 
-#include <cpu/defs.h>
-#include <cpu/CpuModule.h>
+#include <cpu/m68k/defs.h>
+#include <cpu/m68k/CpuModule.h>
 
 #include <macos/traps.h>
 #include <macos/sysequ.h>
