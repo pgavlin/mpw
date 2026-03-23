@@ -127,8 +127,15 @@ namespace RM
 
 			std::string resolved = OS::resolve_path_ci(path);
 			auto data = rsrc::readResourceFork(resolved);
-			if (data.empty())
-				return SetResError(MacOS::resFNotFound);
+			if (data.empty()) {
+				// If opening for write access, create an empty resource fork
+				if (permission > 1) {
+					data = rsrc::ResourceFile::createEmpty();
+					rsrc::writeResourceFork(resolved, data);
+				} else {
+					return SetResError(MacOS::resFNotFound);
+				}
+			}
 
 			auto rf = rsrc::ResourceFile::open(data);
 			if (!rf)

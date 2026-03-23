@@ -49,6 +49,7 @@
 #include <cpu/fmem.h>
 
 #include <macos/errors.h>
+#include <rsrc/rsrc.h>
 
 #include "os.h"
 #include "rm.h"
@@ -316,6 +317,9 @@ namespace OS {
 		}
 
 		d0 = OS::Internal::SetFinderInfo(sname, fileType, creator);
+
+		// Create an empty resource fork (Mac files always have one)
+		rsrc::writeResourceFork(sname, rsrc::ResourceFile::createEmpty());
 
 		return d0;
 	}
