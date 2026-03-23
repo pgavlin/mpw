@@ -601,43 +601,31 @@ namespace OS {
 		return 0;
 	}
 
+	namespace Native {
+		uint16_t HFSDispatch(uint32_t paramBlock, uint16_t selector)
+		{
+			switch (selector)
+			{
+				case 0x0007: return PBGetWDInfo(paramBlock);
+				case 0x0009: return PBGetCatInfo(paramBlock);
+				case 0x000a: return PBSetCatInfo(paramBlock);
+				case 0x001a: return PBHOpenDF(paramBlock);
+				case 0x0038: return PBHOpenDeny(paramBlock);
+				case 0x0039: return PBHOpenRFDeny(paramBlock);
+				default:
+					fprintf(stderr, "HFSDispatch: selector %08x not implemented\n", selector);
+					exit(1);
+			}
+			return 0;
+		}
+	}
+
 	uint16_t HFSDispatch(uint16_t trap)
 	{
-
 		uint32_t selector = cpuGetDReg(0);
 		uint32_t paramBlock = cpuGetAReg(0);
-
 		Log("%04x HFSDispatch(%08x, %08x)\n", trap, selector, paramBlock);
-
-		switch (selector)
-		{
-			case 0x0007:
-				return PBGetWDInfo(paramBlock);
-				break;
-
-			case 0x0009:
-				return PBGetCatInfo(paramBlock);
-				break;
-
-			case 0x000a:
-				return PBSetCatInfo(paramBlock);
-				break;
-
-			case 0x001a:
-				return PBHOpenDF(paramBlock);
-
-			case 0x0038:
-				return PBHOpenDeny(paramBlock);
-
-			case 0x0039:
-				return PBHOpenRFDeny(paramBlock);
-
-			default:
-				fprintf(stderr, "HFSDispatch: selector %08x not implemented\n",
-					selector);
-				exit(1);
-		}
-		return 0;
+		return Native::HFSDispatch(paramBlock, selector);
 	}
 
 

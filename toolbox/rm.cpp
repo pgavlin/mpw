@@ -217,6 +217,194 @@ namespace RM
 			memoryWriteByte(load ? 0xff : 0x00, MacOS::ResLoad);
 			return SetResError(0);
 		}
+
+		int16_t CurResFile()
+		{
+			SetResError(0);
+			return currentResFile;
+		}
+
+		uint16_t UseResFile(int16_t refNum)
+		{
+			auto *of = findOpenFile(refNum);
+			if (!of)
+				return SetResError(MacOS::resFNotFound);
+			currentResFile = refNum;
+			return SetResError(0);
+		}
+
+		uint16_t CloseResFile(int16_t refNum)
+		{
+			if (refNum == 0)
+				return SetResError(0);
+			auto *of = findOpenFile(refNum);
+			if (!of)
+				return SetResError(MacOS::resFNotFound);
+			if (of->dirty) {
+				auto serialized = of->file->serialize();
+				rsrc::writeResourceFork(of->path, serialized);
+			}
+			for (auto it = rhandle_map.begin(); it != rhandle_map.end(); ) {
+				if (it->second.refNum == refNum)
+					it = rhandle_map.erase(it);
+				else
+					++it;
+			}
+			if (currentResFile == refNum) {
+				bool found = false;
+				for (auto it = openFiles.begin(); it != openFiles.end(); ++it) {
+					if (it->refNum == refNum) {
+						auto next = std::next(it);
+						currentResFile = (next != openFiles.end()) ? next->refNum : -1;
+						found = true;
+						break;
+					}
+				}
+				if (!found) currentResFile = -1;
+			}
+			openFiles.remove_if([refNum](const OpenResFileEntry &f) { return f.refNum == refNum; });
+			return SetResError(0);
+		}
+
+		int16_t OpenResFile(const std::string &name)
+		{
+			int16_t refNum = -1;
+			uint16_t err = OpenResourceFile(name, 0, refNum);
+			SetResError(err);
+			return err ? -1 : refNum;
+		}
+
+		uint16_t ReleaseResource(uint32_t theResource)
+		{
+			return SetResError(0);
+		}
+
+		int16_t HomeResFile(uint32_t theResource)
+		{
+			auto iter = rhandle_map.find(theResource);
+			if (iter == rhandle_map.end()) {
+				SetResError(MacOS::resNotFound);
+				return -1;
+			}
+			SetResError(0);
+			return iter->second.refNum;
+		}
+
+		uint16_t GetResAttrs(uint32_t theResource)
+		{
+			auto iter = rhandle_map.find(theResource);
+			if (iter == rhandle_map.end()) {
+				SetResError(MacOS::resNotFound);
+				return 0;
+			}
+			auto *of = findOpenFile(iter->second.refNum);
+			if (!of) {
+				SetResError(MacOS::resFNotFound);
+				return 0;
+			}
+			const rsrc::ResourceEntry *entry = of->file->findResource(iter->second.type, iter->second.id);
+			SetResError(0);
+			return entry ? entry->attributes : 0;
+		}
+
+		uint16_t GetResInfo(uint32_t theResource, int16_t *theID, uint32_t *theType, std::string *name)
+		{
+			auto iter = rhandle_map.find(theResource);
+			if (iter == rhandle_map.end())
+				return SetResError(MacOS::resNotFound);
+			const ResourceRef &ref = iter->second;
+			if (theID) *theID = ref.id;
+			if (theType) *theType = ref.type;
+			if (name) *name = ref.name;
+			return SetResError(0);
+		}
+
+		int32_t GetResourceSizeOnDisk(uint32_t theResource)
+		{
+			auto iter = rhandle_map.find(theResource);
+			if (iter == rhandle_map.end()) {
+				SetResError(MacOS::resNotFound);
+				return 0;
+			}
+			auto info = MM::GetHandleInfo(theResource);
+			SetResError(0);
+			return info.error() ? 0 : info->size;
+		}
+
+		uint16_t UpdateResFile(int16_t refNum)
+		{
+			auto *of = findOpenFile(refNum);
+			if (!of) return SetResError(MacOS::resFNotFound);
+			if (of->dirty) {
+				auto serialized = of->file->serialize();
+				rsrc::writeResourceFork(of->path, serialized);
+				of->dirty = false;
+			}
+			return SetResError(0);
+		}
+
+		uint16_t AddResource(uint32_t theData, uint32_t theType, int16_t theID, const std::string &name)
+		{
+			auto *of = currentFile();
+			if (!of) return SetResError(MacOS::resFNotFound);
+
+			auto info = MM::GetHandleInfo(theData);
+			if (info.error()) return SetResError(MacOS::addResFailed);
+
+			std::vector<uint8_t> resData;
+			if (info->size > 0) {
+				resData.resize(info->size);
+				std::memcpy(resData.data(), memoryPointer(info->address), info->size);
+			}
+
+			of->file->addResource(theType, theID, name, 0, resData);
+			of->dirty = true;
+
+			ResourceRef ref;
+			ref.refNum = of->refNum;
+			ref.type = theType;
+			ref.id = theID;
+			ref.name = name;
+			rhandle_map[theData] = ref;
+
+			return SetResError(0);
+		}
+
+		uint16_t ChangedResource(uint32_t theResource)
+		{
+			auto iter = rhandle_map.find(theResource);
+			if (iter == rhandle_map.end())
+				return SetResError(MacOS::resNotFound);
+			auto *of = findOpenFile(iter->second.refNum);
+			if (!of) return SetResError(MacOS::resFNotFound);
+			auto info = MM::GetHandleInfo(theResource);
+			if (!info.error() && info->size > 0) {
+				std::vector<uint8_t> resData(info->size);
+				std::memcpy(resData.data(), memoryPointer(info->address), info->size);
+				of->file->updateResource(iter->second.type, iter->second.id, resData);
+			}
+			of->dirty = true;
+			return SetResError(0);
+		}
+
+		uint16_t RemoveResource(uint32_t theResource)
+		{
+			auto iter = rhandle_map.find(theResource);
+			if (iter == rhandle_map.end())
+				return SetResError(MacOS::resNotFound);
+			auto *of = findOpenFile(iter->second.refNum);
+			if (of) {
+				of->file->removeResource(iter->second.type, iter->second.id);
+				of->dirty = true;
+			}
+			rhandle_map.erase(iter);
+			return SetResError(0);
+		}
+
+		uint16_t ResError()
+		{
+			return memoryReadWord(MacOS::ResErr);
+		}
 	}
 
 	uint16_t CloseResFile(uint16_t trap)
@@ -1120,5 +1308,13 @@ namespace RM
 		memoryWriteLong(nativeType, theType);
 
 		return SetResError(0);
+	}
+
+	bool IsRMRefNum(int16_t refNum, std::string *outPath)
+	{
+		auto *entry = findOpenFile(refNum);
+		if (!entry) return false;
+		if (outPath) *outPath = entry->path;
+		return true;
 	}
 }

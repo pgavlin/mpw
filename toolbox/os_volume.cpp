@@ -256,47 +256,34 @@ namespace OS {
 		 * directory is returned in ioWDDirID.
 		 */
 
-		 enum {
-			/* WDPBRec */
-			_qLink = 0,
-			_qType = 4,
-			_ioTrap = 6,
-			_ioCmdAddr = 8,
-			_ioCompletion = 12,
-			_ioResult = 16,
-			_ioNamePtr = 18,
-			_ioVRefNum = 22,
-			_filler1 = 24,
-			_ioWDIndex = 26,
-			_ioWDProcID = 28,
-			_ioWDVRefNum = 32,
-			_filler2 = 34,
-			_ioWDDirID = 48,
-		 };
-
-
 		uint32_t parm = cpuGetAReg(0);
 
 		Log("%04x HGetVol(%08x)\n", trap, parm);
 
-		uint32_t namePtr = memoryReadLong(parm + _ioNamePtr);
+		return Native::HGetVol(parm);
+	}
 
-		memoryWriteWord(0, parm + _ioResult);
-		memoryWriteWord(0, parm + _ioVRefNum);
-		memoryWriteLong(0, parm + _ioWDProcID);
-		memoryWriteWord(0, parm + _ioWDVRefNum);
+	namespace Native {
+		uint16_t HGetVol(uint32_t parm)
+		{
+			enum {
+				_ioResult = 16, _ioNamePtr = 18, _ioVRefNum = 22,
+				_ioWDProcID = 28, _ioWDVRefNum = 32, _ioWDDirID = 48,
+			};
 
+			uint32_t namePtr = memoryReadLong(parm + _ioNamePtr);
 
-		// todo -- this should create an FSSpec entry for
-		// the current wd and return the id.
-		// (FSMakeSpec handles 0 as a dir, so ok for now)
-		// ioWDDirID
-		memoryWriteLong(0, parm + _ioWDDirID);
+			memoryWriteWord(0, parm + _ioResult);
+			memoryWriteWord(0, parm + _ioVRefNum);
+			memoryWriteLong(0, parm + _ioWDProcID);
+			memoryWriteWord(0, parm + _ioWDVRefNum);
+			memoryWriteLong(0, parm + _ioWDDirID);
 
-		std::string tmp = "MacOS";
-		ToolBox::WritePString(namePtr, tmp);
+			std::string tmp = "MacOS";
+			ToolBox::WritePString(namePtr, tmp);
 
-		return 0;
+			return 0;
+		}
 	}
 
 

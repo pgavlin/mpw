@@ -37,6 +37,25 @@ namespace OS
 
 	uint16_t OpenCommon(uint32_t parm, bool fsspec, bool resource);
 
+	// Native functions taking parameter block pointer directly.
+	// These are the same as the trap handlers but don't read from A0/D0.
+	namespace Native {
+		uint16_t Read(uint32_t parm);
+		uint16_t Write(uint32_t parm);
+		uint16_t Close(uint32_t parm);
+		uint16_t Create(uint32_t parm, uint16_t trap);
+		uint16_t Delete(uint32_t parm, uint16_t trap);
+		uint16_t Open(uint32_t parm, uint16_t trap);
+		uint16_t OpenRF(uint32_t parm, uint16_t trap);
+		uint16_t GetFileInfo(uint32_t parm, uint16_t trap);
+		uint16_t SetFileInfo(uint32_t parm, uint16_t trap);
+		uint16_t SetEOF(uint32_t parm);
+		uint16_t GetFPos(uint32_t parm);
+		uint16_t SetFPos(uint32_t parm);
+		uint16_t HGetVol(uint32_t parm);
+		uint16_t HFSDispatch(uint32_t parm, uint16_t selector);
+	}
+
 
 	#pragma mark FS Utilities
 	uint16_t Close(uint16_t trap);

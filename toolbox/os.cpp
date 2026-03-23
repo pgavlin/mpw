@@ -143,8 +143,6 @@ namespace OS
 		switch(c)
 		{
 			case 'a':
-				if (ext == "a") // assembler
-					return true;
 				if (ext == "aii") // assembler
 					return true;
 				if (ext == "asm")
@@ -304,103 +302,113 @@ namespace OS
 		return false;
 	}
 
+	namespace Native {
+		uint16_t Close(uint32_t parm)
+		{
+			uint32_t d0;
+			uint16_t ioRefNum = memoryReadWord(parm + 24);
+
+			int rv = OS::Internal::FDEntry::close(ioRefNum, true);
+			if (rv < 0) d0 = macos_error_from_errno();
+			else d0 = 0;
+
+			memoryWriteWord(d0, parm + 16);
+			return d0;
+		}
+	}
+
 	uint16_t Close(uint16_t trap)
 	{
-		uint32_t d0;
 		uint32_t parm = cpuGetAReg(0);
-
 		Log("%04x Close(%08x)\n", trap, parm);
-
-		//uint32_t ioCompletion = memoryReadLong(parm + 12);
-		uint16_t ioRefNum = memoryReadWord(parm + 24);
-
-
-		int rv = OS::Internal::FDEntry::close(ioRefNum, true);
-		if (rv < 0) d0 = macos_error_from_errno();
-		else d0 = 0;
-
-		memoryWriteWord(d0, parm + 16);
-		return d0;
+		return Native::Close(parm);
 	}
 
 
+	namespace Native {
+		uint16_t Create(uint32_t parm, uint16_t trap)
+		{
+			enum {
+				/* FileParam */
+				_qLink = 0,
+				_qType = 4,
+				_ioTrap = 6,
+				_ioCmdAddr = 8,
+				_ioCompletion = 12,
+				_ioResult = 16,
+				_ioNamePtr = 18,
+				_ioVRefNum = 22,
+				_ioFRefNum = 24,
+				_ioFVersNum = 26,
+				_filler1 = 27,
+				_ioFDirIndex = 28,
+				_ioFlAttrib = 30,
+				_ioFlVersNum = 31,
+				_ioFlFndrInfo = 32,
+				_ioFlNum = 48,
+				_ioFlStBlk = 52,
+				_ioFlLgLen = 54,
+				_ioFlPyLen = 58,
+				_ioFlRStBlk = 62,
+				_ioFlRLgLen = 64,
+				_ioFlRPyLen = 68,
+				_ioFlCrDat = 72,
+				_ioFlMdDat = 76,
+
+				// HFileParam
+				_ioDirID = 48,
+			};
+
+			bool htrap = trap & 0x0200;
+
+			uint32_t d0;
+
+			uint32_t namePtr = memoryReadLong(parm + _ioNamePtr);
+
+			std::string sname = ToolBox::ReadPString(namePtr, true);
+
+			if (!sname.length())
+			{
+				memoryWriteWord(MacOS::bdNamErr, parm + _ioResult);
+				return MacOS::bdNamErr;
+			}
+
+			if (htrap)
+			{
+				uint32_t ioDirID = memoryReadLong(parm + _ioDirID);
+				sname = FSSpecManager::ExpandPath(sname, ioDirID);
+			}
+
+			sname = OS::resolve_path_ci(sname, false);
+
+			int fd;
+			fd = ::open(sname.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
+
+			if (fd < 0)
+			{
+				d0 = macos_error_from_errno();
+			}
+			else
+			{
+				::close(fd);
+				d0 = 0;
+			}
+
+			memoryWriteWord(d0, parm + _ioResult);
+			return d0;
+		}
+	}
+
 	uint16_t Create(uint16_t trap)
 	{
-
-		enum {
-			/* FileParam */
-			_qLink = 0,
-			_qType = 4,
-			_ioTrap = 6,
-			_ioCmdAddr = 8,
-			_ioCompletion = 12,
-			_ioResult = 16,
-			_ioNamePtr = 18,
-			_ioVRefNum = 22,
-			_ioFRefNum = 24,
-			_ioFVersNum = 26,
-			_filler1 = 27,
-			_ioFDirIndex = 28,
-			_ioFlAttrib = 30,
-			_ioFlVersNum = 31,
-			_ioFlFndrInfo = 32,
-			_ioFlNum = 48,
-			_ioFlStBlk = 52,
-			_ioFlLgLen = 54,
-			_ioFlPyLen = 58,
-			_ioFlRStBlk = 62,
-			_ioFlRLgLen = 64,
-			_ioFlRPyLen = 68,
-			_ioFlCrDat = 72,
-			_ioFlMdDat = 76,
-
-			// HFileParam
-			_ioDirID = 48,
-		};
-
 		bool htrap = trap & 0x0200;
 		const char *func = htrap ? "HCreate" : "Create";
-
-		uint32_t d0;
 
 		uint32_t parm = cpuGetAReg(0);
 
 		Log("%04x %s(%08x)\n", trap, func, parm);
 
-		uint32_t namePtr = memoryReadLong(parm + _ioNamePtr);
-
-		std::string sname = ToolBox::ReadPString(namePtr, true);
-
-		if (!sname.length())
-		{
-			memoryWriteWord(MacOS::bdNamErr, parm + _ioResult);
-			return MacOS::bdNamErr;
-		}
-
-		if (htrap)
-		{
-			uint32_t ioDirID = memoryReadLong(parm + _ioDirID);
-			sname = FSSpecManager::ExpandPath(sname, ioDirID);
-		}
-
-		sname = OS::resolve_path_ci(sname, false);
-		Log("     %s(%s)\n", func, sname.c_str());
-
-		int fd;
-		fd = ::open(sname.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
-
-		if (fd < 0)
-		{
-			d0 = macos_error_from_errno();
-		}
-		else
-		{
-			::close(fd);
-			d0 = 0;
-		}
-
-		memoryWriteWord(d0, parm + _ioResult);
-		return d0;
+		return Native::Create(parm, trap);
 	}
 
 
@@ -457,227 +465,189 @@ namespace OS
 		return d0;
 	}
 
+	namespace Native {
+		uint16_t Open(uint32_t parm, uint16_t trap)
+		{
+			bool htrap = trap & 0x0200;
+			return OpenCommon(parm, htrap, false);
+		}
+
+		uint16_t OpenRF(uint32_t parm, uint16_t trap)
+		{
+			bool htrap = trap & 0x0200;
+			return OpenCommon(parm, htrap, true);
+		}
+	}
+
 	uint16_t Open(uint16_t trap)
 	{
-
 		bool htrap = trap & 0x0200;
 		const char *func = htrap ? "HOpen" : "Open";
 
 		uint32_t parm = cpuGetAReg(0);
 		Log("%04x %s(%08x)\n", trap, func, parm);
-		return OpenCommon(parm, htrap, false);
+		return Native::Open(parm, trap);
 	}
 
 	uint16_t OpenRF(uint16_t trap)
 	{
-
 		bool htrap = trap & 0x0200;
 		const char *func = htrap ? "HOpenRF" : "OpenRF";
 
 		uint32_t parm = cpuGetAReg(0);
 		Log("%04x %s(%08x)\n", trap, func, parm);
-		return OpenCommon(parm, htrap, true);
+		return Native::OpenRF(parm, trap);
 	}
 
+
+	namespace Native {
+		uint16_t Read(uint32_t parm)
+		{
+			uint32_t d0;
+			int32_t pos;
+
+			uint16_t ioRefNum = memoryReadWord(parm + 24);
+			uint32_t ioBuffer = memoryReadLong(parm + 32);
+			int32_t ioReqCount = memoryReadLong(parm + 36);
+			uint16_t ioPosMode = memoryReadWord(parm + 44);
+			int32_t ioPosOffset = memoryReadLong(parm + 46);
+
+			if (ioReqCount < 0)
+			{
+				d0 = MacOS::paramErr;
+				memoryWriteWord(d0, parm + 16);
+				return d0;
+			}
+
+			pos = Internal::mac_seek(ioRefNum, ioPosMode, ioPosOffset);
+			if (pos < 0)
+			{
+				d0 = pos;
+				pos = 0;
+				memoryWriteLong(pos, parm + 46);
+				memoryWriteWord(d0, parm + 16);
+				return d0;
+			}
+
+			ssize_t count = OS::Internal::FDEntry::read(ioRefNum, memoryPointer(ioBuffer), ioReqCount);
+			if (count >= 0)
+			{
+				d0 = 0;
+				pos += count;
+				memoryWriteLong(count, parm + 40);
+			}
+			if (count == 0 && ioReqCount > 0) d0 = MacOS::eofErr;
+			if (count < 0) d0 = macos_error_from_errno();
+
+			memoryWriteLong(pos, parm + 46);
+			memoryWriteWord(d0, parm + 16);
+			return d0;
+		}
+
+		uint16_t Write(uint32_t parm)
+		{
+			uint32_t d0;
+			int32_t pos;
+
+			uint16_t ioRefNum = memoryReadWord(parm + 24);
+			uint32_t ioBuffer = memoryReadLong(parm + 32);
+			int32_t ioReqCount = memoryReadLong(parm + 36);
+			uint16_t ioPosMode = memoryReadWord(parm + 44);
+			int32_t ioPosOffset = memoryReadLong(parm + 46);
+
+			if (ioReqCount < 0)
+			{
+				d0 = MacOS::paramErr;
+				memoryWriteWord(d0, parm + 16);
+				return d0;
+			}
+
+			pos = Internal::mac_seek(ioRefNum, ioPosMode, ioPosOffset);
+			if (pos < 0)
+			{
+				d0 = pos;
+				pos = 0;
+				memoryWriteLong(pos, parm + 46);
+				memoryWriteWord(d0, parm + 16);
+				return d0;
+			}
+
+			ssize_t count = OS::Internal::FDEntry::write(ioRefNum, memoryPointer(ioBuffer), ioReqCount);
+			if (count >= 0)
+			{
+				d0 = 0;
+				pos += count;
+				memoryWriteLong(count, parm + 40);
+			}
+			if (count < 0) d0 = macos_error_from_errno();
+
+			memoryWriteLong(pos, parm + 46);
+			memoryWriteWord(d0, parm + 16);
+			return d0;
+		}
+	}
 
 	uint16_t Read(uint16_t trap)
 	{
-		uint32_t d0;
-		int32_t pos;
 		uint32_t parm = cpuGetAReg(0);
-
 		Log("%04x Read(%08x)\n", trap, parm);
-
-		//uint32_t ioCompletion = memoryReadLong(parm + 12);
-
-		uint16_t ioRefNum = memoryReadWord(parm + 24);
-		uint32_t ioBuffer = memoryReadLong(parm + 32);
-		int32_t ioReqCount = memoryReadLong(parm + 36);
-		uint16_t ioPosMode = memoryReadWord(parm + 44);
-		int32_t ioPosOffset = memoryReadLong(parm + 46);
-
-		if (ioReqCount < 0)
-		{
-			d0 = MacOS::paramErr;
-			memoryWriteWord(d0, parm + 16);
-			return d0;
-		}
-
-		pos = Internal::mac_seek(ioRefNum, ioPosMode, ioPosOffset);
-		if (pos < 0)
-		{
-			d0 = pos;
-			pos = 0;
-
-			memoryWriteLong(pos, parm + 46); // new offset.
-			memoryWriteWord(d0, parm + 16);
-			return d0;
-		}
-
-		Log("     read(%04x, %08x, %08x)\n", ioRefNum, ioBuffer, ioReqCount);
-		ssize_t count = OS::Internal::FDEntry::read(ioRefNum, memoryPointer(ioBuffer), ioReqCount);
-		if (count >= 0)
-		{
-			d0 = 0;
-			pos += count;
-			memoryWriteLong(count, parm + 40);
-		}
-
-		if (count == 0 && ioReqCount > 0)
-		{
-			d0 = MacOS::eofErr;
-		}
-		if (count < 0)
-		{
-			d0 = macos_error_from_errno();
-		}
-
-		memoryWriteLong(pos, parm + 46); // new offset.
-		memoryWriteWord(d0, parm + 16);
-		return d0;
-
+		return Native::Read(parm);
 	}
-
 
 	uint16_t Write(uint16_t trap)
 	{
-		uint32_t d0;
-		int32_t pos;
 		uint32_t parm = cpuGetAReg(0);
-
 		Log("%04x Write(%08x)\n", trap, parm);
-
-		//uint32_t ioCompletion = memoryReadLong(parm + 12);
-
-		uint16_t ioRefNum = memoryReadWord(parm + 24);
-		uint32_t ioBuffer = memoryReadLong(parm + 32);
-		int32_t ioReqCount = memoryReadLong(parm + 36);
-		uint16_t ioPosMode = memoryReadWord(parm + 44);
-		int32_t ioPosOffset = memoryReadLong(parm + 46);
-
-		if (ioReqCount < 0)
-		{
-			d0 = MacOS::paramErr;
-			memoryWriteWord(d0, parm + 16);
-			return d0;
-		}
-
-		pos = Internal::mac_seek(ioRefNum, ioPosMode, ioPosOffset);
-		if (pos < 0)
-		{
-			d0 = pos;
-			pos = 0;
-
-			memoryWriteLong(pos, parm + 46); // new offset.
-			memoryWriteWord(d0, parm + 16);
-			return d0;
-
-		}
-
-		Log("     write(%04x, %08x, %08x)\n", ioRefNum, ioBuffer, ioReqCount);
-		ssize_t count = OS::Internal::FDEntry::write(ioRefNum, memoryPointer(ioBuffer), ioReqCount);
-		if (count >= 0)
-		{
-			d0 = 0;
-			pos += count;
-			memoryWriteLong(count, parm + 40);
-		}
-
-		if (count < 0)
-		{
-			d0 = macos_error_from_errno();
-		}
-
-		memoryWriteLong(pos, parm + 46); // new offset.
-		memoryWriteWord(d0, parm + 16);
-		return d0;
-
+		return Native::Write(parm);
 	}
 
 
 
 
+	namespace Native {
+		uint16_t Delete(uint32_t parm, uint16_t trap)
+		{
+			enum { _ioResult = 16, _ioNamePtr = 18, _ioDirID = 48 };
+			struct stat st;
+			bool htrap = trap & 0x0200;
+			uint32_t d0;
+
+			uint32_t namePtr = memoryReadLong(parm + _ioNamePtr);
+			std::string sname = ToolBox::ReadPString(namePtr, true);
+
+			if (!sname.length()) {
+				memoryWriteWord(MacOS::bdNamErr, parm + _ioResult);
+				return MacOS::bdNamErr;
+			}
+
+			if (htrap) {
+				uint32_t ioDirID = memoryReadLong(parm + _ioDirID);
+				sname = FSSpecManager::ExpandPath(sname, ioDirID);
+			}
+
+			sname = OS::resolve_path_ci(sname);
+
+			int ok = ::lstat(sname.c_str(), &st);
+			if (ok == 0) {
+				if (S_ISDIR(st.st_mode))
+					ok = ::rmdir(sname.c_str());
+				else
+					ok = ::unlink(sname.c_str());
+			}
+
+			d0 = (ok < 0) ? macos_error_from_errno() : 0;
+			memoryWriteWord(d0, parm + _ioResult);
+			return d0;
+		}
+	}
+
 	uint16_t Delete(uint16_t trap)
 	{
-		enum {
-			/* FileParam */
-			_qLink = 0,
-			_qType = 4,
-			_ioTrap = 6,
-			_ioCmdAddr = 8,
-			_ioCompletion = 12,
-			_ioResult = 16,
-			_ioNamePtr = 18,
-			_ioVRefNum = 22,
-			_ioFRefNum = 24,
-			_ioFVersNum = 26,
-			_filler1 = 27,
-			_ioFDirIndex = 28,
-			_ioFlAttrib = 30,
-			_ioFlVersNum = 31,
-			_ioFlFndrInfo = 32,
-			_ioFlNum = 48,
-			_ioFlStBlk = 52,
-			_ioFlLgLen = 54,
-			_ioFlPyLen = 58,
-			_ioFlRStBlk = 62,
-			_ioFlRLgLen = 64,
-			_ioFlRPyLen = 68,
-			_ioFlCrDat = 72,
-			_ioFlMdDat = 76,
-
-			// HFileParam
-			_ioDirID = 48,
-		};
-
-		struct stat st;
-
 		bool htrap = trap & 0x0200;
 		const char *func = htrap ? "HDelete" : "Delete";
-
-		uint32_t d0;
-
 		uint32_t parm = cpuGetAReg(0);
-
 		Log("%04x %s(%08x)\n", trap, func, parm);
-
-		uint32_t namePtr = memoryReadLong(parm + _ioNamePtr);
-
-		std::string sname = ToolBox::ReadPString(namePtr, true);
-
-		if (!sname.length())
-		{
-			memoryWriteWord(MacOS::bdNamErr, parm + _ioResult);
-			return MacOS::bdNamErr;
-		}
-
-		if (htrap)
-		{
-			uint32_t ioDirID = memoryReadLong(parm + _ioDirID);
-			sname = FSSpecManager::ExpandPath(sname, ioDirID);
-		}
-
-		sname = OS::resolve_path_ci(sname);
-		Log("     %s(%s)\n", func, sname.c_str());
-
-		int ok;
-
-		ok = ::lstat(sname.c_str(), &st);
-		if (ok == 0)
-		{
-			if (S_ISDIR(st.st_mode))
-				ok = ::rmdir(sname.c_str());
-			else
-				ok = ::unlink(sname.c_str());
-		}
-
-		if (ok < 0)
-			d0 = macos_error_from_errno();
-		else
-			d0 = 0;
-
-		memoryWriteWord(d0, parm + _ioResult);
-		return d0;
+		return Native::Delete(parm, trap);
 	}
 
 
@@ -713,80 +683,72 @@ namespace OS
 		return d0;
 	}
 
+	namespace Native {
+		uint16_t SetEOF(uint32_t parm)
+		{
+			uint16_t ioRefNum = memoryReadWord(parm + 24);
+			uint32_t ioMisc = memoryReadLong(parm + 28);
+			uint32_t d0 = ::ftruncate(ioRefNum, ioMisc) < 0 ? macos_error_from_errno() : 0;
+			memoryWriteWord(d0, parm + 16);
+			return d0;
+		}
+
+		uint16_t GetFPos(uint32_t parm)
+		{
+			uint32_t d0;
+			uint16_t ioRefNum = memoryReadWord(parm + 24);
+			int rv = ::lseek(ioRefNum, 0, SEEK_CUR);
+			if (rv < 0) {
+				d0 = macos_error_from_errno();
+			} else {
+				memoryWriteLong(0, parm + 36);
+				memoryWriteLong(0, parm + 40);
+				memoryWriteWord(0, parm + 44);
+				memoryWriteLong(rv, parm + 46);
+				d0 = 0;
+			}
+			memoryWriteWord(d0, parm + 16);
+			return d0;
+		}
+
+		uint16_t SetFPos(uint32_t parm)
+		{
+			uint32_t d0;
+			uint16_t ioRefNum = memoryReadWord(parm + 24);
+			uint16_t ioPosMode = memoryReadWord(parm + 44);
+			int32_t ioPosOffset = memoryReadLong(parm + 46);
+
+			ioPosOffset = Internal::mac_seek(ioRefNum, ioPosMode, ioPosOffset);
+			d0 = 0;
+			if (ioPosOffset < 0) {
+				d0 = ioPosOffset;
+				ioPosOffset = 0;
+			}
+			memoryWriteLong(ioPosOffset, parm + 46);
+			memoryWriteWord(d0, parm + 16);
+			return d0;
+		}
+	}
+
 	uint16_t SetEOF(uint16_t trap)
 	{
-		uint32_t d0;
-
 		uint32_t parm = cpuGetAReg(0);
-
 		Log("%04x SetEOF(%08x)\n", trap, parm);
-
-		//uint32_t ioCompletion = memoryReadLong(parm + 12);
-		uint16_t ioRefNum = memoryReadWord(parm + 24);
-		uint32_t ioMisc = memoryReadLong(parm + 28);
-
-		int rv = ::ftruncate(ioRefNum, ioMisc);
-
-		d0 = rv < 0  ? macos_error_from_errno() : 0;
-
-		memoryWriteWord(d0, parm + 16);
-		return d0;
+		return Native::SetEOF(parm);
 	}
 
 	uint16_t GetFPos(uint16_t trap)
 	{
-		uint32_t d0;
-
 		uint32_t parm = cpuGetAReg(0);
-
 		Log("%04x GetFPos(%08x)\n", trap, parm);
-
-		//uint32_t ioCompletion = memoryReadLong(parm + 12);
-		uint16_t ioRefNum = memoryReadWord(parm + 24);
-
-		int rv = ::lseek(ioRefNum, 0, SEEK_CUR);
-		if (rv < 0)
-		{
-			d0 = macos_error_from_errno();
-		}
-		else
-		{
-			memoryWriteLong(0, parm + 36); // ioReqCount
-			memoryWriteLong(0, parm + 40); // ioActCount
-			memoryWriteWord(0, parm + 44); // ioPosMode
-			memoryWriteLong(rv, parm + 46); // ioPosOffset
-			d0 = 0;
-		}
-
-		memoryWriteWord(d0, parm + 16);
-		return d0;
+		return Native::GetFPos(parm);
 	}
 
 	uint16_t SetFPos(uint16_t trap)
 	{
-		uint32_t d0;
-
 		uint32_t parm = cpuGetAReg(0);
-
 		Log("%04x SetFPos(%08x)\n", trap, parm);
-
-		//uint32_t ioCompletion = memoryReadLong(parm + 12);
-		uint16_t ioRefNum = memoryReadWord(parm + 24);
-		uint16_t ioPosMode = memoryReadWord(parm + 44);
-		int32_t ioPosOffset = memoryReadLong(parm + 46);
-
-
-		ioPosOffset = Internal::mac_seek(ioRefNum, ioPosMode, ioPosOffset);
-		d0 = 0;
-		if (ioPosOffset < 0)
-		{
-			d0 = ioPosOffset;
-			ioPosOffset = 0;
-		}
-
-		memoryWriteLong(ioPosOffset, parm + 46); // new offset.
-		memoryWriteWord(d0, parm + 16);
-		return d0;
+		return Native::SetFPos(parm);
 	}
 
 
