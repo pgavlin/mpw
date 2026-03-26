@@ -604,6 +604,7 @@ bool LoadPEF(const uint8_t *data, size_t size,
 	const uint8_t *symTable = libTable + importedLibraryCount * 24;
 
 	std::vector<uint32_t> importAddresses(totalImportedSymCount, 0);
+	result.imports.resize(totalImportedSymCount);
 	uint32_t resolvedCount = 0;
 	uint32_t unresolvedCount = 0;
 
@@ -638,6 +639,7 @@ bool LoadPEF(const uint8_t *data, size_t size,
 				addr = resolver(libName, symName, symClass);
 
 			importAddresses[symIdx] = addr;
+			result.imports[symIdx] = {libName, symName, symClass, addr};
 
 			if (trace) {
 				fprintf(stderr, "PEF:     [%d] %s (%s%s) -> ",

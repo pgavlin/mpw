@@ -22,12 +22,20 @@ struct ExportedSymbolInfo {
 	uint8_t  symbolClass;
 };
 
+struct ImportedSymbolInfo {
+	std::string library;
+	std::string symbol;
+	uint8_t symbolClass;
+	uint32_t resolvedAddress;
+};
+
 struct LoadResult {
 	uint32_t entryPoint;    // main entry TVector address (0 if none)
 	uint32_t initPoint;     // init entry TVector address (0 if none)
 	uint32_t termPoint;     // term entry TVector address (0 if none)
 	uint32_t tocBase;       // TOC base for r2
 	std::vector<SectionInfo> sections;
+	std::vector<ImportedSymbolInfo> imports;
 	std::vector<ExportedSymbolInfo> exports;
 };
 

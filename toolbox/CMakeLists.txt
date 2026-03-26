@@ -63,3 +63,10 @@ target_link_libraries(cfm_test TOOLBOX_LIB MPW_LIB MACOS_LIB MPLITE_LIB M68K_LIB
 
 add_executable(dispatch_test dispatch_test.cpp)
 target_link_libraries(dispatch_test TOOLBOX_LIB MPW_LIB MACOS_LIB MPLITE_LIB M68K_LIB PPC_LIB RSRC_LIB sane)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(CAPSTONE REQUIRED capstone)
+add_executable(pef_inspect pef_inspect.cpp)
+target_include_directories(pef_inspect PRIVATE ${CAPSTONE_INCLUDE_DIRS})
+target_link_directories(pef_inspect PRIVATE ${CAPSTONE_LIBRARY_DIRS})
+target_link_libraries(pef_inspect TOOLBOX_LIB MPW_LIB MACOS_LIB MPLITE_LIB M68K_LIB PPC_LIB RSRC_LIB sane ${CAPSTONE_LIBRARIES})
