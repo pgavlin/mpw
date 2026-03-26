@@ -10,7 +10,7 @@
 
 As discovered in Phase 3 analysis, InterfaceLib, MathLib, and PrivateInterfaceLib are **stub libraries** — PEFs with no code or data, only export catalogs. We do NOT load their PEFs. Instead, we register a native C++ handler for each function that StdCLib imports. The CFM stub system from Phase 3 allocates a TVector with an `sc` instruction for each handler.
 
-This phase implements **only** the 66 symbols StdCLib actually imports (verified via DumpPEF). Additional wrappers for symbols that other tools import directly from InterfaceLib are deferred to Phase 4b.
+This phase implements **only** the 66 symbols StdCLib actually imports (verified via DumpPEF). Additional wrappers for symbols that other tools import directly from InterfaceLib are deferred to Phase 8.
 
 The PPC calling convention: r3-r10 are parameters (left to right), r3 is the return value, f1-f13 for FP parameters, f1 for FP return.
 
@@ -313,7 +313,7 @@ assert(catchAll == 0); // all 66 should be pre-registered
 
 ### StdCLib init test
 
-Call StdCLib's `__initialize` entry point. This should complete without crashing. Watch for ECON ioctl calls (won't work yet — Phase 5) and Gestalt/NewPtr calls (should work).
+Call StdCLib's `__initialize` entry point. This should complete without crashing. Watch for ECON ioctl calls (won't work yet — Phase 6) and Gestalt/NewPtr calls (should work).
 
 ---
 

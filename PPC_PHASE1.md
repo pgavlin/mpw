@@ -312,7 +312,7 @@ No changes needed — `pkg_check_modules` is called in the `cpu/ppc/CMakeLists.t
    - `SetTraceCode()` — per-instruction trace via UC_HOOK_CODE
 6. Modify `cpu/CMakeLists.txt` — add ppc subdirectory
 7. Modify `bin/CMakeLists.txt` — link PPC_LIB
-8. Modify `bin/loader.cpp` — page-aligned memory allocation. The existing `--trace-cpu` flag will be wired to `PPC::SetTraceCode()` in Phase 6 when the PPC execution path is added.
+8. Modify `bin/loader.cpp` — page-aligned memory allocation. The existing `--trace-cpu` flag will be wired to `PPC::SetTraceCode()` in Phase 5 when the PPC execution path is added.
 
 ---
 

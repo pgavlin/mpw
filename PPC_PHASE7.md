@@ -104,7 +104,7 @@ reg("InterfaceLib", "SomeFunction", []() {
 
 **Diagnosis:** Check `--trace-cpu` output — after the sc handler, does the next instruction address make sense?
 
-**Fix:** Already handled in Phase 1 (set PC = SRR0 in interrupt hook). If SRR0 isn't correct, compute return address manually from the stub code layout.
+**Fix:** Already handled in Phase 1 (sc hook returns via PC = LR). If execution doesn't resume correctly, check that LR was set by `bctrl` before the stub's `sc` instruction.
 
 ---
 

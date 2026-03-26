@@ -189,7 +189,7 @@ For stubs where argument decoding is impractical, fall back to raw register valu
   sc> InterfaceLib::GetProcessInformation(r3=0x00140100, r4=0x00140200) -> 0
 ```
 
-Wire the flag in `loader.cpp` (in Phase 6 when the PPC execution path is added):
+Wire the flag in `loader.cpp` (in Phase 5 when the PPC execution path is added):
 ```cpp
 if (Flags.traceToolBox) CFMStubs::SetTrace(true);
 ```
@@ -216,7 +216,7 @@ Add `cfm_stubs.cpp` to the TOOLBOX_LIB source list.
 
 ### `cpu/ppc/ppc.cpp`
 
-Wire the sc handler to call `CFMStubs::Dispatch()`. This is done in the loader (Phase 6) via `PPC::SetSCHandler(CFMStubs::Dispatch)`, so no changes to ppc.cpp are needed here — the connection happens at the call site.
+Wire the sc handler to call `CFMStubs::Dispatch()`. This is done in the loader (Phase 5) via `PPC::SetSCHandler(CFMStubs::Dispatch)`, so no changes to ppc.cpp are needed here — the connection happens at the call site.
 
 ---
 

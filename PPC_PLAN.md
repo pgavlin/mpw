@@ -194,7 +194,7 @@ Key wrappers: Memory Manager (NewPtr, DisposePtr, NewHandle, etc.), File Manager
 
 ---
 
-## Phase 4b: Additional InterfaceLib Wrappers for Tools
+## Phase 8: Additional InterfaceLib Wrappers for Tools
 
 **Goal:** Implement additional InterfaceLib wrappers that PPC tools import directly (beyond what StdCLib needs). Demand-driven — add as tools require them.
 

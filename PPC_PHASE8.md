@@ -1,14 +1,14 @@
-# Phase 4b: Additional InterfaceLib Wrappers for Tools
+# Phase 8: Additional InterfaceLib Wrappers for Tools
 
 **Goal:** Implement InterfaceLib wrappers for symbols that PPC tools (other than StdCLib) import directly.
 
-**Depends on:** Phase 4 (StdCLib wrappers), Phase 6 (end-to-end execution to discover which additional stubs are needed).
+**Depends on:** Phase 4 (StdCLib wrappers), Phases 5-6 (end-to-end execution to discover which additional stubs are needed).
 
 ---
 
 ## Overview
 
-Phase 4 implements exactly the 66 symbols StdCLib imports. When we begin running actual PPC tools in Phase 6, those tools may import additional symbols from InterfaceLib directly (not via StdCLib). This phase adds those wrappers as needed.
+Phase 4 implements exactly the 66 symbols StdCLib imports. When we begin running actual PPC tools in Phases 5-6, those tools may import additional symbols from InterfaceLib directly (not via StdCLib). This phase adds those wrappers as needed.
 
 The catch-all handler from Phase 4 will identify missing stubs at runtime:
 ```
@@ -86,11 +86,11 @@ Add wrappers to `toolbox/ppc_dispatch.cpp` as a new registration function:
 ```cpp
 namespace PPCDispatch {
     void RegisterStdCLibImports();  // Phase 4
-    void RegisterToolImports();     // Phase 4b
+    void RegisterToolImports();     // Phase 8
 }
 ```
 
-`RegisterToolImports()` is called after `RegisterStdCLibImports()` in the Phase 6 loader. Any symbol already registered by Phase 4 is skipped (RegisterStub returns the existing TVector).
+`RegisterToolImports()` is called after `RegisterStdCLibImports()` in the Phase 5 loader. Any symbol already registered by Phase 4 is skipped (RegisterStub returns the existing TVector).
 
 ---
 

@@ -345,7 +345,7 @@ Major changes:
 
 ### `bin/CMakeLists.txt`
 
-Add `PPC_LIB` to the mpw target link libraries (if not already done in Phase 1).
+Add `PPC_LIB` to the mpw target link libraries (already done in Phase 1).
 
 ---
 
