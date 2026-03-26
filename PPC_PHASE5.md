@@ -14,7 +14,6 @@ This phase connects the PPC CPU (Phase 1), PEF loader (Phase 2), CFM stubs (Phas
 2. Initialize the PPC subsystem
 3. Load the tool PEF — shared libraries are loaded on demand when the tool's imports reference them
 4. Run shared library init routines, then the tool
-5. Capture the exit code
 
 ---
 
@@ -231,39 +230,6 @@ The existing trace flags are reused for PPC — no new flags needed. When the PP
 
 `--trace-toolbox` is the one you'll use most often — it shows the entire API call sequence StdCLib makes during initialization and execution.
 
-### Debugger Support
-
-The existing interactive debugger (`bin/debugger.cpp`) supports breakpoints, memory inspection, register display, and single-stepping for 68K. For PPC, add basic debugger integration:
-
-**Phase 5 scope (minimal):**
-- `--debug` flag should work with PPC tools: drop into debugger before first PPC instruction
-- Register display: show r0-r31, f0-f13, PC, LR, CTR, CR, XER, r2 (TOC)
-- Memory inspection: already works (shared memory)
-- `PPC::SetBreakpoint(addr)` — use `UC_HOOK_CODE` with a specific address range to break
-
-**Deferred (not needed for Hello World):**
-- PPC single-stepping (can be done with `uc_emu_start(... count=1)`)
-- PPC disassembly in debugger (would need a PPC disassembler, or use `DumpPEF`)
-- Breakpoints within StdCLib code
-
-### Memory Watchpoints
-
-For debugging the exit chain and stdout buffering, add memory write watchpoints:
-
-```cpp
-// Watch writes to the stdout FILE flags field:
-PPC::SetWatchpoint(stdoutFileAddr + 0x12, 2, [](uint32_t addr, uint32_t val) {
-    fprintf(stderr, "  WATCH: stdout flags written: 0x%04X\n", val);
-});
-
-// Watch writes to info+0x0E (exit code):
-PPC::SetWatchpoint(MacProgramInfo + 0x0E, 4, [](uint32_t addr, uint32_t val) {
-    fprintf(stderr, "  WATCH: exit code written: %d\n", (int32_t)val);
-});
-```
-
-Implement via `UC_HOOK_MEM_WRITE` with address range filtering.
-
 ---
 
 ## Files to Modify
@@ -290,16 +256,11 @@ Major changes:
    - CFMStubs::Init
    - PPC::SetSCHandler
    - PPCDispatch::RegisterStdCLibImports
-   - Load StdCLib
-   - Register exports
-   - Set up exit chain
-   - Patch device table
-   - Run StdCLib init
-   - Load tool
+   - Load tool PEF (on-demand library loading via resolver)
+   - Run library init routines
    - Run tool
-   - Capture exit code
 4. **Add PPCCallFunction helper**
-5. **Add shared library search**
+5. **Add shared library search**: `findSharedLibrary()`
 6. **Add includes**: ppc.h, pef_loader.h, cfm_stubs.h, ppc_dispatch.h
 
 ### `bin/CMakeLists.txt`
@@ -316,87 +277,56 @@ Add `PPC_LIB` to the mpw target link libraries (already done in Phase 1).
 4. Add `PPCCallFunction()` helper
 5. Add the PPC execution path in `main()`:
    a. Detect PEF
-   b. Initialize PPC subsystem
-   c. Load StdCLib
-   d. Register StdCLib exports
-   e. Set up exit chain
-   f. Patch device table
-   g. Run StdCLib __initialize
-   h. Load tool PEF
-   i. Run tool entry point
-   j. Capture exit code
-6. Add new includes and link flags
+   b. Initialize PPC subsystem (PPC::Init, CFMStubs, wrappers, trace flags)
+   c. Load tool PEF with on-demand library resolver
+   d. Run library init routines
+   e. Run tool entry point
+6. Add new includes
 
 ---
 
 ## Validation
 
-### End-to-end test: Hello World
-
+### Build test
 ```bash
 cd build && cmake .. && make
-./bin/mpw --ppc ~/path/to/Hello
 ```
 
-**Expected output:**
+### PEF detection
+```bash
+./bin/mpw --ppc tools/Hello        # should enter PPC path
+./bin/mpw --68k ~/mpw/Tools/Canon  # should enter 68K path as before
 ```
-Hello, world!
-```
 
-**Expected exit code:** 0 (`echo $?`)
+### On-demand library loading
 
-### Trace test
-
-Run with tracing to see the full execution flow:
+Run with `--trace-toolbox` to verify:
+1. Tool PEF loaded, imports enumerated
+2. StdCLib PEF loaded on demand when first StdCLib import is encountered
+3. StdCLib's own imports (InterfaceLib, MathLib) resolve against CFM stubs
+4. All StdCLib exports registered
 
 ```bash
-./bin/mpw --ppc --trace-toolbox ~/path/to/Hello
+./bin/mpw --ppc --trace-toolbox tools/Hello
 ```
 
-Should show:
-1. StdCLib imports being resolved
-2. StdCLib __initialize stub calls (Gestalt, NewPtr, NewRoutineDescriptor, ECON ioctls)
-3. Tool imports being resolved
-4. Tool execution: fprintf → StdCLib internal calls → ECON write
-5. Exit path: exit → _RTExit → longjmp → __start returns
+### StdCLib init (expected to crash)
 
-### Failure mode: Missing stubs
+StdCLib's `__initialize` will be called and will crash when it reaches ECON device calls (not implemented until Phase 6). With `--trace-toolbox`, the trace should show stub calls up to the crash point. This confirms the integration harness works — Phase 6 fills in the missing pieces.
 
-If StdCLib imports a function we haven't implemented:
+### 68K regression
+
+Verify existing 68K tools still work:
+```bash
+./bin/mpw DumpPEF 2>&1 | head -1  # should print usage
 ```
-PPC: unresolved import InterfaceLib::SomeFunction
-```
-
-Add the missing stub and retry.
-
-### Failure mode: StdCLib init crashes
-
-If `__initialize` crashes:
-1. Enable `CFMStubs::SetTrace(true)` to see the last stub call before the crash
-2. Check PPC register state (PC, LR, r1) at crash point
-3. Common causes: missing stub, wrong argument passing, bad memory access
-
-### Failure mode: No output
-
-If the tool runs but produces no output:
-1. stdout may not be line-buffered → `\r` doesn't trigger flush
-2. Exit may crash before flushing → data is lost in FILE buffer
-3. Check Phase 6's ECON ioctl validation
-4. Try HelloFlush (with explicit `fflush`) as a simpler test
-
-### Failure mode: Exit crashes
-
-If `exit(0)` crashes:
-1. The exit chain (info+0x24) may be wrong → Phase 7 debugging
-2. `longjmp` target may be corrupted
-3. Enable instruction tracing around `_RTExit` code offset 0xF050
 
 ---
 
 ## Risk Notes
 
-- **Shared library path**: The exact location of StdCLib in `~/mpw` may vary. Add helpful error messages if not found.
-- **Multiple shared libraries**: The tool may import from InterfaceLib directly (not just via StdCLib). These are handled by CFM stubs, not by loading InterfaceLib as a PEF.
+- **Shared library path**: The exact location of shared libraries in `~/mpw` may vary. Add helpful error messages if not found.
+- **Recursive resolver**: The on-demand resolver calls `LoadPEFFile` recursively (tool → StdCLib → InterfaceLib stubs). Ensure no infinite recursion if a library can't be found (the `loadedLibs` map check prevents re-loading, but a library that imports from itself would loop).
 - **PPC stack setup**: The PPC stack must not overlap with the 68K stack or any allocated memory. Place it carefully.
-- **Re-entrance**: `PPCCallFunction` is called twice (StdCLib init, then tool). The PPC engine state (registers) must be properly reset between calls.
-- **Fat binaries**: Some tools have both 68K (CODE resources) and PPC (PEF data fork) code. The `--ppc` flag forces PPC; auto-detection should prefer PPC if PEF is present (or 68K if CODE resources exist — this is a policy choice).
+- **Re-entrance**: `PPCCallFunction` is called multiple times (library inits, then tool). The PPC engine state (registers) must be properly reset between calls.
+- **Fat binaries**: Some tools have both 68K (CODE resources) and PPC (PEF data fork) code. The `--ppc` flag forces PPC; auto-detection should prefer PPC if PEF is present.
