@@ -31,6 +31,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <map>
 #include <chrono>
 
 #include <sysexits.h>
@@ -50,6 +51,11 @@ extern "C" void cpuSetRaiseInterrupt(BOOLE raise_irq);
 #include <toolbox/os.h>
 #include <toolbox/path_utils.h>
 #include <toolbox/loader.h>
+#include <toolbox/pef_loader.h>
+#include <toolbox/cfm_stubs.h>
+#include <toolbox/ppc_dispatch.h>
+
+#include <cpu/ppc/ppc.h>
 
 #include <mpw/mpw.h>
 
@@ -334,6 +340,8 @@ void help()
 	printf(" --trace-macsbug     print macsbug names\n");
 	printf(" --trace-toolbox     print toolbox calls\n");
 	printf(" --trace-mpw         print mpw calls\n");
+	printf(" --ppc               force PPC execution (PEF data fork)\n");
+	printf(" --68k               force 68K execution (CODE resources)\n");
 	printf(" --memory-stats      print memory usage information\n");
 	printf(" --profile           generate callgrind profiling output\n");
 	printf(" --profile-output=F  set profile output filename\n");
@@ -529,6 +537,140 @@ void MainLoop()
 
 }
 
+// -- PPC support --
+
+static bool IsPEFFile(const std::string &path) {
+	FILE *f = fopen(path.c_str(), "rb");
+	if (!f) return false;
+	uint8_t header[8];
+	size_t n = fread(header, 1, 8, f);
+	fclose(f);
+	return n == 8 && PEFLoader::IsPEF(header, 8);
+}
+
+static std::string findSharedLibrary(const std::string &name) {
+	std::string mpwRoot = MPW::RootDir();
+
+	std::vector<std::string> searchPaths = {
+		mpwRoot + "/Libraries/SharedLibraries/" + name,
+		mpwRoot + "/SharedLibraries/" + name,
+		mpwRoot + "/Libraries/" + name,
+	};
+
+	for (const auto &path : searchPaths) {
+		struct stat st;
+		if (stat(path.c_str(), &st) == 0) return path;
+	}
+
+	return "";
+}
+
+static void PPCCallFunction(uint32_t tvecAddr) {
+	uint32_t codeAddr = memoryReadLong(tvecAddr);
+	uint32_t toc = memoryReadLong(tvecAddr + 4);
+
+	// Set up PPC stack pointer at top of memory, below 68K stack
+	uint32_t ppcStackTop = Flags.memorySize - Flags.stackSize - 64;
+	ppcStackTop &= ~0xF; // 16-byte aligned
+	PPC::SetGPR(1, ppcStackTop);
+	PPC::SetGPR(2, toc);
+	PPC::SetLR(0); // sentinel: blr to 0 stops execution
+
+	PPC::Execute(codeAddr, toc);
+}
+
+static void RunPPC(int argc, char **argv, const std::string &command) {
+	// Initialize PPC subsystem
+	PPC::Init(Memory, MemorySize);
+	CFMStubs::Init();
+	PPC::SetSCHandler(CFMStubs::Dispatch);
+	PPCDispatch::RegisterStdCLibImports();
+
+	// Wire trace flags
+	if (Flags.traceCPU) PPC::SetTraceCode(true);
+	if (Flags.traceToolBox) {
+		CFMStubs::SetTrace(true);
+		PEFLoader::SetTrace(true);
+	}
+
+	// Track loaded libraries
+	std::map<std::string, PEFLoader::LoadResult> loadedLibs;
+
+	// Resolver that loads real libraries on demand
+	std::function<uint32_t(const std::string &, const std::string &, uint8_t)> resolver;
+	resolver = [&](const std::string &lib, const std::string &sym,
+	               uint8_t cls) -> uint32_t {
+		// Check if already resolved (CFM stubs or previously loaded library)
+		uint32_t addr = CFMStubs::ResolveImport(lib, sym);
+		if (addr) return addr;
+
+		// Try to load the library PEF if not yet loaded
+		if (loadedLibs.find(lib) == loadedLibs.end()) {
+			std::string libPath = findSharedLibrary(lib);
+			if (!libPath.empty()) {
+				if (Flags.traceToolBox)
+					fprintf(stderr, "PPC: loading shared library %s from %s\n",
+					        lib.c_str(), libPath.c_str());
+
+				PEFLoader::LoadResult libResult;
+				bool ok = PEFLoader::LoadPEFFile(libPath, resolver, libResult);
+				if (ok) {
+					for (const auto &exp : libResult.exports) {
+						if (exp.sectionIndex < libResult.sections.size()) {
+							uint32_t a = libResult.sections[exp.sectionIndex].address
+							             + exp.offset;
+							CFMStubs::RegisterTVector(lib, exp.name, a);
+						}
+					}
+					loadedLibs[lib] = std::move(libResult);
+
+					addr = CFMStubs::ResolveImport(lib, sym);
+					if (addr) return addr;
+				}
+			} else {
+				if (Flags.traceToolBox)
+					fprintf(stderr, "PPC: shared library %s not found\n", lib.c_str());
+			}
+		}
+
+		// Register catch-all for truly unresolved imports
+		return CFMStubs::RegisterStub(lib, sym, [lib, sym]() {
+			fprintf(stderr, "PPC FATAL: unimplemented stub %s::%s called\n",
+			        lib.c_str(), sym.c_str());
+			fprintf(stderr, "  r3=0x%08X r4=0x%08X r5=0x%08X LR=0x%08X\n",
+			        PPC::GetGPR(3), PPC::GetGPR(4), PPC::GetGPR(5), PPC::GetLR());
+			PPC::Stop();
+		});
+	};
+
+	// Load tool PEF
+	PEFLoader::LoadResult toolResult;
+	bool ok = PEFLoader::LoadPEFFile(command, resolver, toolResult);
+	if (!ok) {
+		fprintf(stderr, "PPC: failed to load %s\n", command.c_str());
+		exit(EX_SOFTWARE);
+	}
+
+	// Run library init routines
+	for (auto &kv : loadedLibs) {
+		if (kv.second.initPoint) {
+			if (Flags.traceToolBox)
+				fprintf(stderr, "PPC: running %s __initialize\n", kv.first.c_str());
+			PPCCallFunction(kv.second.initPoint);
+		}
+	}
+
+	// Run tool entry point
+	if (toolResult.entryPoint) {
+		if (Flags.traceToolBox)
+			fprintf(stderr, "PPC: running tool entry point\n");
+		PPCCallFunction(toolResult.entryPoint);
+	} else {
+		fprintf(stderr, "PPC: no entry point in %s\n", command.c_str());
+		exit(EX_SOFTWARE);
+	}
+}
+
 int main(int argc, char **argv)
 {
 	// getopt...
@@ -545,6 +687,8 @@ int main(int argc, char **argv)
 		kProfile,
 		kProfileOutput,
 		kShell,
+		kForcePPC,
+		kForce68K,
 	};
 	static struct option LongOpts[] =
 	{
@@ -564,6 +708,9 @@ int main(int argc, char **argv)
 		{ "memory-stats", no_argument, NULL, kMemoryStats },
 		{ "profile", no_argument, NULL, kProfile },
 		{ "profile-output", required_argument, NULL, kProfileOutput },
+
+		{ "ppc", no_argument, NULL, kForcePPC },
+		{ "68k", no_argument, NULL, kForce68K },
 
 		{ "help", no_argument, NULL, 'h' },
 		{ "version", no_argument, NULL, 'V' },
@@ -614,6 +761,14 @@ int main(int argc, char **argv)
 
 			case kDebugger:
 				Flags.debugger = true;
+				break;
+
+			case kForcePPC:
+				Flags.forcePPC = true;
+				break;
+
+			case kForce68K:
+				Flags.force68K = true;
 				break;
 
 			case kShell:
@@ -721,6 +876,27 @@ int main(int argc, char **argv)
 	ToolBox::Init();
 	MPW::Init(argc, argv);
 
+	// Detect PPC vs 68K.
+	// Default to 68K — many tools are fat binaries with both PEF and CODE.
+	// Use --ppc to force PPC mode.
+	bool usePPC;
+	if (Flags.forcePPC) usePPC = true;
+	else if (Flags.force68K) usePPC = false;
+	else usePPC = false; // default to 68K
+
+	if (usePPC) {
+		// 68K CPU still needs basic init for Gestalt bridge etc.
+		cpuStartup();
+		cpuSetModel(3, 0);
+
+		RunPPC(argc, argv, command);
+
+		uint32_t rv = MPW::ExitStatus();
+		if (rv > 0xff) rv = 0xff;
+		exit(rv);
+	}
+
+	// -- 68K path (unchanged) --
 
 	cpuStartup();
 	cpuSetRaiseInterrupt(FALSE);

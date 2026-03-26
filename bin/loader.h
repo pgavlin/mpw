@@ -21,6 +21,9 @@ struct Settings {
 
 	bool debugger = false;
 
+	bool forcePPC = false;
+	bool force68K = false;
+
 	bool memoryStats = false;
 
 	bool profile = false;
