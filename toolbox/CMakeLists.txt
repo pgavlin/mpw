@@ -33,6 +33,7 @@ set(TOOLBOX_SRC
 	fpinfo.cpp
 	debug.cpp
 	pef_loader.cpp
+	cfm_stubs.cpp
 
 )
 
@@ -55,3 +56,6 @@ target_link_libraries(TOOLBOX_LIB MACOS_LIB sane RSRC_LIB)
 
 add_executable(pef_test pef_test.cpp)
 target_link_libraries(pef_test TOOLBOX_LIB MPW_LIB MACOS_LIB MPLITE_LIB M68K_LIB RSRC_LIB sane)
+
+add_executable(cfm_test cfm_test.cpp)
+target_link_libraries(cfm_test TOOLBOX_LIB MPW_LIB MACOS_LIB MPLITE_LIB M68K_LIB PPC_LIB RSRC_LIB sane)
