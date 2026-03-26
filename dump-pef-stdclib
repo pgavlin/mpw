@@ -16003,15 +16003,33 @@ resource 'cfrg' (0) {
 0F76C 0F6EC          60050000               ori       r5,r0,0x0000
 0F770 0F6F0          7CA345AA               stswi     r5,r3,8
 0F774 0F6F4   X      4E800020               blr
-0F778 0F6F8   X      7CA802A6               mflr      r5                        ; LR = 8
-0F77C 0F6FC          7CC00026               mfcr      r6
-0F780 0F700          90A30000               stw       r5,0x0000(r3)
-0F784 0F704          90C30004               stw       r6,0x0004(r3)
-0F788 0F708          90230008               stw       SP,0x0008(r3)
-0F78C 0F70C          9043000C               stw       RTOC,0x000C(r3)
-0F790 0F710          BDA30014               stmw      r13,0x0014(r3)
-0F794 0F714          FC00048E               mffs      fp0
-0F798 0F718          D9C30060               stfd      fp14,0x0060(r3)
+; ===========================================================================
+; __setjmp — save CPU state to jmp_buf for later longjmp
+;
+; Args: r3 = pointer to jmp_buf (0xF8 = 248 bytes)
+; Returns: 0 on initial call, non-zero when returned via longjmp
+;
+; jmp_buf layout:
+;   +0x00: LR (return address)
+;   +0x04: CR (condition register)
+;   +0x08: SP (r1)
+;   +0x0C: RTOC (r2)
+;   +0x14: r13-r31 (19 GPRs × 4 = 76 bytes, via stmw)
+;   +0x60: f14-f31 (18 FPRs × 8 = 144 bytes)
+;   +0xF0: FPSCR (FP status/control register)
+;
+; NOTE: r3 itself is NOT saved. longjmp sets r3 = its second argument.
+; NOTE: r4-r12 are NOT saved (volatile registers per PPC ABI).
+; ===========================================================================
+0F778 0F6F8   X      7CA802A6               mflr      r5                        ; r5 = LR (return address)
+0F77C 0F6FC          7CC00026               mfcr      r6                        ; r6 = CR
+0F780 0F700          90A30000               stw       r5,0x0000(r3)             ; jmp_buf[0x00] = LR
+0F784 0F704          90C30004               stw       r6,0x0004(r3)             ; jmp_buf[0x04] = CR
+0F788 0F708          90230008               stw       SP,0x0008(r3)             ; jmp_buf[0x08] = SP
+0F78C 0F70C          9043000C               stw       RTOC,0x000C(r3)           ; jmp_buf[0x0C] = RTOC
+0F790 0F710          BDA30014               stmw      r13,0x0014(r3)            ; jmp_buf[0x14..0x5F] = r13-r31
+0F794 0F714          FC00048E               mffs      fp0                       ; fp0 = FPSCR
+0F798 0F718          D9C30060               stfd      fp14,0x0060(r3)           ; jmp_buf[0x60] = f14
 0F79C 0F71C          D9E30068               stfd      fp15,0x0068(r3)
 0F7A0 0F720          DA030070               stfd      fp16,0x0070(r3)
 0F7A4 0F724          DA230078               stfd      fp17,0x0078(r3)
@@ -16029,17 +16047,30 @@ resource 'cfrg' (0) {
 0F7D4 0F754          DBA300D8               stfd      fp29,0x00D8(r3)
 0F7D8 0F758          DBC300E0               stfd      fp30,0x00E0(r3)
 0F7DC 0F75C          DBE300E8               stfd      fp31,0x00E8(r3)
-0F7E0 0F760          D80300F0               stfd      fp0,0x00F0(r3)
-0F7E4 0F764   X      38600000               li        r3,0
+0F7E0 0F760          D80300F0               stfd      fp0,0x00F0(r3)            ; jmp_buf[0xF0] = FPSCR
+0F7E4 0F764   X      38600000               li        r3,0                      ; return 0 (initial setjmp call)
 0F7E8 0F768   X      4E800020               blr
-0F7EC 0F76C          80A30000               lwz       r5,0x0000(r3)
-0F7F0 0F770          80C30004               lwz       r6,0x0004(r3)
-0F7F4 0F774   X      7CA803A6               mtlr      r5                        ; LR = 8
-0F7F8 0F778          7CCFF120               mtcrf     255,r6
-0F7FC 0F77C          80230008               lwz       SP,0x0008(r3)
-0F800 0F780          8043000C               lwz       RTOC,0x000C(r3)
-0F804 0F784          B9A30014               lmw       r13,0x0014(r3)
-0F808 0F788          C9C30060               lfd       fp14,0x0060(r3)
+; ===========================================================================
+; longjmp — restore CPU state from jmp_buf, return to setjmp caller
+;
+; Args: r3 = pointer to jmp_buf, r4 = return value (passed as setjmp result)
+; Does not return to caller — jumps to the LR saved in jmp_buf.
+;
+; After restore: r3 = r4 (the return value). If r4 was 0, forces r3 = 1
+; (C standard requires longjmp to never make setjmp return 0).
+;
+; NOTE: This is called from _RTExit as longjmp(__target_for_exit, 1).
+; After longjmp, execution resumes in __start at the instruction after
+; the __setjmp call, with r3 = 1 (so the bne check takes the cleanup path).
+; ===========================================================================
+0F7EC 0F76C          80A30000               lwz       r5,0x0000(r3)             ; r5 = jmp_buf[0x00] = saved LR
+0F7F0 0F770          80C30004               lwz       r6,0x0004(r3)             ; r6 = jmp_buf[0x04] = saved CR
+0F7F4 0F774   X      7CA803A6               mtlr      r5                        ; restore LR
+0F7F8 0F778          7CCFF120               mtcrf     255,r6                    ; restore CR (all fields)
+0F7FC 0F77C          80230008               lwz       SP,0x0008(r3)             ; restore SP
+0F800 0F780          8043000C               lwz       RTOC,0x000C(r3)           ; restore RTOC
+0F804 0F784          B9A30014               lmw       r13,0x0014(r3)            ; restore r13-r31
+0F808 0F788          C9C30060               lfd       fp14,0x0060(r3)           ; restore f14
 0F80C 0F78C          C9E30068               lfd       fp15,0x0068(r3)
 0F810 0F790          CA030070               lfd       fp16,0x0070(r3)
 0F814 0F794          CA230078               lfd       fp17,0x0078(r3)
@@ -16056,13 +16087,15 @@ resource 'cfrg' (0) {
 0F840 0F7C0          CB8300D0               lfd       fp28,0x00D0(r3)
 0F844 0F7C4          CBA300D8               lfd       fp29,0x00D8(r3)
 0F848 0F7C8          CBC300E0               lfd       fp30,0x00E0(r3)
-0F84C 0F7CC          C80300F0               lfd       fp0,0x00F0(r3)
+0F84C 0F7CC          C80300F0               lfd       fp0,0x00F0(r3)            ; fp0 = saved FPSCR
 0F850 0F7D0          CBE300E8               lfd       fp31,0x00E8(r3)
-0F854 0F7D4   X      7C832379               mr.       r3,r4
-0F858 0F7D8          FDFE058E               mtfsf     255,fp0
-0F85C 0F7DC   X      4C820020               bnelr
-0F860 0F7E0   X      38600001               li        r3,1
-0F864 0F7E4   X      4E800020               blr
+; Set r3 = r4 (longjmp return value). If r4 == 0, force r3 = 1.
+0F854 0F7D4   X      7C832379               mr.       r3,r4                     ; r3 = r4, set CR0
+0F858 0F7D8          FDFE058E               mtfsf     255,fp0                   ; restore FPSCR
+0F85C 0F7DC   X      4C820020               bnelr                               ; if r3 != 0, return (blr to saved LR)
+0F860 0F7E0   X      38600001               li        r3,1                      ; if r4 was 0, force r3 = 1
+0F864 0F7E4   X      4E800020               blr                                 ; return to saved LR
+; end longjmp
 0F868 0F7E8          89830000               lbz       r12,0x0000(r3)
 0F86C 0F7EC          38630001               addi      r3,r3,1
 0F870 0F7F0   X      2C0C0000               cmpwi     r12,0
