@@ -148,21 +148,9 @@ if (toolResult.entryPoint) {
 }
 ```
 
-The tool's entry point is typically `__start` (in the tool's own code section). `__start`:
-1. Calls `setjmp(__target_for_exit)`
-2. Loads argc/argv from MPGM
-3. Calls `main(argc, argv)`
-4. Calls `exit(return_value)`
-5. `exit()` → `_RTExit` → `longjmp(__target_for_exit, 1)` → returns to `__start`
-6. `__start` reads `*_exit_status` and returns (`blr`)
+See `PPC_EXIT_MECHANISM.md` for the full `__start` → `setjmp` → `main` → `exit` → `longjmp` flow.
 
-### Step 7: Capture Exit Code
-
-```cpp
-uint32_t rv = MPW::ExitStatus();  // reads info+0x0E
-if (rv > 0xff) rv = 0xff;
-exit(rv);
-```
+Exit code capture (`MPW::ExitStatus()` reading `info+0x0E`) is MPW-specific and handled in Phase 6.
 
 ---
 
