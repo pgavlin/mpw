@@ -58,6 +58,16 @@ Several source files are generated at build time:
 
 Edit the `.rl`/`.lemon` source files, not their generated outputs.
 
+## Analyzing PowerPC Binaries
+
+Use the MPW `DumpPEF` tool to inspect PPC executables and shared libraries:
+
+```bash
+mpw DumpPEF -do All -pi u -a -fmt on <path-to-pef>
+```
+
+This produces full information for all sections including code section disassembly, unpacked data sections, import/export tables, and relocation info.
+
 ## License Constraints
 
 The CPU emulation code (`cpu/`) is GPL v2+. All other code is BSD 2-Clause, but the compiled binary is GPL v2 due to linking.

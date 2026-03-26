@@ -358,9 +358,12 @@ When PC reaches 0 (from `blr` with LR=0), the main loop stops.
 The exit chain and line-buffering details are partially speculative. This phase covers diagnosing and fixing what doesn't work.
 
 ### Diagnostic Tools
-- Add `--trace-ppc` flag: log each sc dispatch (stub name, registers)
-- Add `--trace-ppc-cpu` flag: hook `UC_HOOK_CODE` to log every instruction
-- Log unresolved imports during PEF loading (helps identify missing stubs)
+All PPC tracing reuses existing CLI flags — no new flags needed:
+- `--trace-cpu`: PPC instruction trace (via `UC_HOOK_CODE`)
+- `--trace-toolbox`: CFM stub dispatch + PEF loader logging
+- `--trace-mpw`: ECON device handler calls
+- `--debug`: Interactive debugger with PPC register display
+- Unresolved imports are logged automatically during PEF loading
 
 ### Likely Issues to Debug
 1. **Exit chain layout wrong**: Trace `_RTExit` instruction-by-instruction to see exact pointer dereferences. Adjust info+0x24 setup.
