@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cctype>
 #include <cstring>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <chrono>
@@ -666,7 +667,7 @@ int main(int argc, char **argv)
 	}
 
 	Flags.stackSize = (Flags.stackSize + 0xff) & ~0xff;
-	Flags.memorySize = (Flags.memorySize + 0xff) & ~0xff;
+	Flags.memorySize = (Flags.memorySize + 0xfff) & ~0xfff; // page-align for Unicorn
 
 	if (Flags.stackSize < 0x100)
 	{
@@ -704,7 +705,9 @@ int main(int argc, char **argv)
 
 
 	// move to CreateRam()
-	Memory = Flags.memory = new uint8_t[Flags.memorySize];
+	// Use aligned_alloc for page alignment (required by Unicorn's uc_mem_map_ptr).
+	Memory = Flags.memory = (uint8_t *)aligned_alloc(4096, Flags.memorySize);
+	memset(Memory, 0, Flags.memorySize);
 	MemorySize = Flags.memorySize;
 
 

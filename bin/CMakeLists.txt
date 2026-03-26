@@ -70,6 +70,7 @@ add_executable(mpw loader.cpp profiler.cpp debugger.cpp debugger_internal.cpp
 
 
 target_link_libraries(mpw M68K_LIB)
+target_link_libraries(mpw PPC_LIB)
 target_link_libraries(mpw TOOLBOX_LIB)
 target_link_libraries(mpw MPW_LIB)
 target_link_libraries(mpw MPLITE_LIB)
