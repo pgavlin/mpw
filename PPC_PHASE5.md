@@ -12,8 +12,8 @@ This phase connects the PPC CPU (Phase 1), PEF loader (Phase 2), CFM stubs (Phas
 
 1. Detect whether the tool is a PEF or 68K executable
 2. Initialize the PPC subsystem
-3. Load shared libraries (StdCLib) and run their init routines
-4. Load the tool PEF and run it
+3. Load the tool PEF — shared libraries are loaded on demand when the tool's imports reference them
+4. Run shared library init routines, then the tool
 5. Capture the exit code
 
 ---
@@ -26,7 +26,6 @@ Check the data fork of the tool for PEF magic (`'Joy!' 'peff'`). Also support `-
 
 ```cpp
 static bool IsPEFFile(const std::string &path) {
-    // Read the first 8 bytes of the data fork
     FILE *f = fopen(path.c_str(), "rb");
     if (!f) return false;
     uint8_t header[8];
@@ -59,7 +58,7 @@ Same as the 68K path:
 MM::Init(Memory, MemorySize, kGlobalSize, Flags.stackSize);
 OS::Init();
 ToolBox::Init();
-MPW::Init(argc, argv);  // or MPW::InitPPC(argc, argv) if separate
+MPW::Init(argc, argv);
 ```
 
 ### Step 3: Initialize PPC
@@ -71,106 +70,94 @@ PPC::SetSCHandler(CFMStubs::Dispatch);
 PPCDispatch::RegisterStdCLibImports();
 ```
 
-### Step 4: Load StdCLib
+### Step 4: Load the Tool PEF (with on-demand library loading)
 
-Find the StdCLib shared library. The search path should be:
-1. `$MPW/SharedLibraries/StdCLib` (or similar)
-2. `~/mpw/SharedLibraries/StdCLib`
-3. Alongside the tool executable
+The tool's import resolver drives all shared library loading. When the tool imports from "StdCLib", the resolver loads StdCLib's PEF, resolves StdCLib's own imports (from InterfaceLib/MathLib — our CFM stubs), registers StdCLib's exports, and returns the requested symbol's address.
 
-```cpp
-std::string stdclibPath = findSharedLibrary("StdCLib");
-PEFLoader::LoadResult stdclibResult;
-bool ok = PEFLoader::LoadPEFFile(stdclibPath, cfmResolver, stdclibResult);
-```
-
-The `cfmResolver` callback resolves StdCLib's imports against our registered stubs. InterfaceLib, MathLib, and PrivateInterfaceLib are **stub libraries** (no code, only export catalogs) — we do NOT load their PEFs. Our CFM stubs from Phase 4 ARE the implementation:
+Stub libraries (InterfaceLib, MathLib, PrivateInterfaceLib) are never loaded as PEFs — our CFM stubs from Phase 4 ARE their implementation.
 
 ```cpp
-auto cfmResolver = [](const std::string &lib, const std::string &sym, uint8_t cls) -> uint32_t {
-    uint32_t addr = CFMStubs::ResolveImport(lib, sym);
-    if (!addr) {
-        // Register catch-all for unimplemented stubs
-        addr = CFMStubs::RegisterStub(lib, sym, [lib, sym]() {
-            fprintf(stderr, "PPC FATAL: unimplemented stub %s::%s called\n",
-                    lib.c_str(), sym.c_str());
-            fprintf(stderr, "  r3=0x%08X r4=0x%08X LR=0x%08X\n",
-                    PPC::GetGPR(3), PPC::GetGPR(4), PPC::GetLR());
-            PPC::Stop();
-        });
-    }
-    return addr;
-};
-```
+// Track loaded libraries: name → LoadResult
+std::map<std::string, PEFLoader::LoadResult> loadedLibs;
 
-### Step 5: Register StdCLib Exports
-
-After loading StdCLib, register all its exports as available for the tool's import resolution:
-
-```cpp
-for (const auto &exp : stdclibResult.exports) {
-    uint32_t addr = stdclibResult.sections[exp.sectionIndex].address + exp.offset;
-    CFMStubs::RegisterTVector("StdCLib", exp.name, addr);
-}
-```
-
-### Step 6: Set Up Exit Chain
-
-After loading StdCLib (so we can find `__target_for_exit`):
-
-```cpp
-uint32_t targetForExit = PEFLoader::FindExport(stdclibResult, "__target_for_exit");
-if (targetForExit) {
-    setupExitChain(targetForExit);  // as described in Phase 6
-}
-```
-
-### Step 7: Patch Device Table
-
-Replace 68K F-trap device handlers with PPC TVectors:
-
-```cpp
-uint32_t devTablePtr = memoryReadLong(MPW::GetMacProgramInfo() + 0x20);
-PPCDispatch::PatchDeviceTable(devTablePtr);
-```
-
-### Step 8: Run StdCLib `__initialize`
-
-```cpp
-if (stdclibResult.initPoint) {
-    PPCCallFunction(stdclibResult.initPoint);
-}
-```
-
-This runs StdCLib's initialization: sets up the FILE structures, ECON device handlers, parses MPGM, etc.
-
-### Step 9: Load the Tool PEF
-
-```cpp
-PEFLoader::LoadResult toolResult;
-// The tool resolver checks StdCLib exports first, then CFM stubs
-auto toolResolver = [&](const std::string &lib, const std::string &sym, uint8_t cls) -> uint32_t {
-    // First try registered TVectors (StdCLib exports)
+// Resolver that loads real libraries on demand
+auto resolver = [&](const std::string &lib, const std::string &sym,
+                     uint8_t cls) -> uint32_t {
+    // First check if already resolved (CFM stubs or previously loaded library)
     uint32_t addr = CFMStubs::ResolveImport(lib, sym);
     if (addr) return addr;
 
-    // Try by specific library
-    if (lib == "StdCLib") {
-        uint32_t exp = PEFLoader::FindExport(stdclibResult, sym);
-        if (exp) {
-            CFMStubs::RegisterTVector(lib, sym, exp);
-            return exp;
+    // Try to load the library PEF if not yet loaded
+    if (loadedLibs.find(lib) == loadedLibs.end()) {
+        std::string libPath = findSharedLibrary(lib);
+        if (!libPath.empty()) {
+            PEFLoader::LoadResult libResult;
+            // Libraries' own imports resolve against CFM stubs (recursive)
+            bool ok = PEFLoader::LoadPEFFile(libPath, resolver, libResult);
+            if (ok) {
+                // Register all exports from this library
+                for (const auto &exp : libResult.exports) {
+                    if (exp.sectionIndex < libResult.sections.size()) {
+                        uint32_t a = libResult.sections[exp.sectionIndex].address
+                                     + exp.offset;
+                        CFMStubs::RegisterTVector(lib, exp.name, a);
+                    }
+                }
+                loadedLibs[lib] = std::move(libResult);
+
+                // Retry the lookup now that exports are registered
+                addr = CFMStubs::ResolveImport(lib, sym);
+                if (addr) return addr;
+            }
         }
     }
 
-    fprintf(stderr, "PPC: unresolved tool import %s::%s\n", lib.c_str(), sym.c_str());
-    return 0;
+    // Register catch-all for truly unresolved imports
+    return CFMStubs::RegisterStub(lib, sym, [lib, sym]() {
+        fprintf(stderr, "PPC FATAL: unimplemented stub %s::%s called\n",
+                lib.c_str(), sym.c_str());
+        fprintf(stderr, "  r3=0x%08X r4=0x%08X LR=0x%08X\n",
+                PPC::GetGPR(3), PPC::GetGPR(4), PPC::GetLR());
+        PPC::Stop();
+    });
 };
 
-ok = PEFLoader::LoadPEFFile(command, toolResolver, toolResult);
+PEFLoader::LoadResult toolResult;
+bool ok = PEFLoader::LoadPEFFile(command, resolver, toolResult);
 ```
 
-### Step 10: Run the Tool
+This naturally handles any library, not just StdCLib. If a tool imports from a library we have stubs for (InterfaceLib), those resolve immediately. If it imports from a real library (StdCLib), the PEF is loaded on demand.
+
+### Step 5: Set Up Exit Chain and Patch Device Table
+
+After loading, look up `__target_for_exit` from whichever library exports it (StdCLib):
+
+```cpp
+// Find __target_for_exit from loaded libraries
+uint32_t targetForExit = 0;
+for (auto &[name, lib] : loadedLibs) {
+    uint32_t addr = PEFLoader::FindExport(lib, "__target_for_exit");
+    if (addr) { targetForExit = addr; break; }
+}
+if (targetForExit) setupExitChain(targetForExit);  // Phase 6
+
+// Patch device table for PPC (Phase 6)
+// PPCDispatch::PatchDeviceTable(...);
+```
+
+### Step 6: Run Library Init Routines
+
+Run `__initialize` for each loaded library that has an init entry:
+
+```cpp
+for (auto &[name, lib] : loadedLibs) {
+    if (lib.initPoint) {
+        PPCCallFunction(lib.initPoint);
+    }
+}
+```
+
+### Step 7: Run the Tool
 
 ```cpp
 if (toolResult.entryPoint) {
@@ -178,7 +165,7 @@ if (toolResult.entryPoint) {
 }
 ```
 
-The tool's entry point is typically `__start` (either its own or imported from StdCLib). `__start`:
+The tool's entry point is typically `__start` (in the tool's own code section). `__start`:
 1. Calls `setjmp(__target_for_exit)`
 2. Loads argc/argv from MPGM
 3. Calls `main(argc, argv)`
@@ -186,7 +173,7 @@ The tool's entry point is typically `__start` (either its own or imported from S
 5. `exit()` → `_RTExit` → `longjmp(__target_for_exit, 1)` → returns to `__start`
 6. `__start` reads `*_exit_status` and returns (`blr`)
 
-### Step 11: Capture Exit Code
+### Step 8: Capture Exit Code
 
 ```cpp
 uint32_t rv = MPW::ExitStatus();  // reads info+0x0E
@@ -236,6 +223,7 @@ static std::string findSharedLibrary(const std::string &name) {
 
     // Try common paths
     std::vector<std::string> searchPaths = {
+        mpwRoot + "/Libraries/SharedLibraries/" + name,
         mpwRoot + "/SharedLibraries/" + name,
         mpwRoot + "/Libraries/" + name,
     };
