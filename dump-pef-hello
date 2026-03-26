@@ -1,0 +1,306 @@
+File: tools/Hello
+
+resource 'cfrg' (0) {
+  { /* array memberArray: 1 element */
+		/* [1] */
+		kPowerPC,                                               /* archType ('pwpc')         */
+		kFullLib,                                               /* updateLevel (0)           */
+		kNoVersionNum,                                          /* currentVersion (0)        */
+		kNoVersionNum,                                          /* oldDefVersion (0)         */
+		kDefaultStackSize,                                      /* appStackSize (0)          */
+		kNoAppSubFolder,                                        /* appSubFolderID (0)        */
+		kIsApp,                                                 /* usage (1)                 */
+		kOnDiskFlat,                                            /* where (1)                 */
+		kZeroOffset,                                            /* offset (0)                */
+		kCFragGoesToEOF,                                        /* length (0)                */
+		"Hello"                                                 /* member name               */
+	}
+};
+
+     Container [1] (Hello) [In data fork (Offset 0x0, Length 0x2CC/716)]
+
+     Container Header
+0000 magic1, magic2   = 0x4A6F7921 ('Joy!')                   magic numbers
+0004 containerID      = 0x70656666 ('peff')                   container identifier
+0008 architectureID   = 0x70777063 ('pwpc')                   architecture identifier
+000C versionNumber    = 0x00000001 (1)                        version
+0010 dateTimeStamp    = 0xE5EAA7F4 (Thu Mar 26 10:08:04 2026) date/time stamp
+0014 oldDefVersion    = 0                                     old definition version
+0018 oldImpVersion    = 0                                     old implementation version
+001C currentVersion   = 0                                     current version
+0020 nbrOfSections    = 3                                     number of sections
+0022 loadableSections = 2                                     number of loadable sections
+0024 memoryAddress    = 0x00000000                            memory address
+
+     =========================================================
+
+     Section Header 0
+0028 sectionName      = 0xFFFFFFFF (-1) ... <unnamed>
+002C sectionAddress   = 0x00000000                            preferred base address for section
+0030 execSize         = 0x0000011C (284)                      execution (byte) size (including zero init)
+0034 initSize         = 0x0000011C (284)                      before zero init (byte) size
+0038 rawSize          = 0x0000011C (284)                      raw data (byte) size
+003C containerOffset  = 0x00000080 (128)                      container offset to the raw data
+0040 regionKind       = 0x00       (code)                     region kind ==> code section (loadable)
+0041 shareKind        = 0x01       (context share)            sharing kind ==> shared within a context
+0042 alignment        = 0x02       (4-byte bndry)             log 2 alignment
+0043 reserved         = 0x00                                  <reserved>
+
+     Section Header 1
+0044 sectionName      = 0xFFFFFFFF (-1) ... <unnamed>
+0048 sectionAddress   = 0x00000000                            preferred base address for section
+004C execSize         = 0x00000050 (80)                       execution (byte) size (including zero init)
+0050 initSize         = 0x00000050 (80)                       before zero init (byte) size
+0054 rawSize          = 0x00000022 (34)                       raw data (byte) size
+0058 containerOffset  = 0x000001A0 (416)                      container offset to the raw data
+005C regionKind       = 0x02       (pidata)                   region kind ==> "pattern" initialized data (loadable)
+005D shareKind        = 0x01       (context share)            sharing kind ==> shared within a context
+005E alignment        = 0x03       (8-byte bndry)             log 2 alignment
+005F reserved         = 0x00                                  <reserved>
+
+     Section Header 2
+0060 sectionName      = 0xFFFFFFFF (-1) ... <unnamed>
+0064 sectionAddress   = 0x00000000                            preferred base address for section
+0068 execSize         = 0x00000000 (0)                        execution (byte) size (including zero init)
+006C initSize         = 0x00000000 (0)                        before zero init (byte) size
+0070 rawSize          = 0x000000FC (252)                      raw data (byte) size
+0074 containerOffset  = 0x000001D0 (464)                      container offset to the raw data
+0078 regionKind       = 0x04       (loader)                   region kind ==> loader (non-loadable)
+0079 shareKind        = 0x01       (context share)            sharing kind ==> shared within a context
+007A alignment        = 0x00                                  log 2 alignment (ignored for non-loadables)
+007B reserved         = 0x00                                  <reserved>
+
+007C There are 4 (pad?) bytes at the end of the section headers.
+     This is probably because there's no string table.
+
+     =========================================================
+
+     Code section 0 (<unnamed>)
+
+; TOC layout (RTOC = data section + 0x30):
+;   RTOC-0x30: TVector ptr → StdCLib::_BreakPoint
+;   RTOC-0x2C: TVector ptr → StdCLib::__setjmp
+;   RTOC-0x28: TVector ptr → StdCLib::fprintf
+;   RTOC-0x24: ptr → StdCLib::_IntEnv (MPGM info block)
+;   RTOC-0x20: ptr → StdCLib::__C_phase
+;   RTOC-0x1C: ptr → StdCLib::__target_for_exit (jmp_buf for exit)
+;   RTOC-0x18: ptr → StdCLib::_exit_status
+;   RTOC-0x14: TVector ptr → StdCLib::exit
+;   RTOC-0x10: ptr → StdCLib::_iob
+;   RTOC-0x0C: ptr → StdCLib::__NubAt3
+;   RTOC-0x04: ptr into data section (string?)
+;   RTOC+0x00: entry TVector {code=0x34, toc=data+0x30}
+;   RTOC+0x08: "Hello, world!\r\0\0__start\0"
+
+     Loc   Flags  Object Code  Label      Opcode    Operand                   Comment
+; ===========================================================================
+; main — the user's main(int argc, char *argv[])
+;
+; Calls fprintf(stdout, "Hello, world!\n"), returns 0.
+; Entry point TVector at data+0x30 has code offset 0x34, but main
+; is at offset 0x00. __start calls main via bl to offset 0x00.
+; ===========================================================================
+0080 0000   X      7C0802A6               mflr      r0                        ; save LR
+0084 0004          90010008               stw       r0,0x0008(SP)
+0088 0008          9421FFC0               stwu      SP,-0x0040(SP)            ; frame = 64 bytes
+008C 000C          8062FFF0               lwz       r3,-0x0010(RTOC)          ; r3 = &_iob (StdCLib FILE table)
+0090 0010          38630018               addi      r3,r3,24                  ; r3 = &_iob[1] = stdout
+                                                                              ; (each FILE is 24 bytes, stdout is index 1)
+0094 0014          38820008               addi      r4,RTOC,8                 ; r4 = RTOC+8 = "Hello, world!\r"
+0098 0018          480000ED               bl        $+0x00EC                  ; call fprintf(stdout, "Hello, world!\r")
+                                                                              ; via glue at 0x0104 → StdCLib::fprintf
+009C 001C          80410014               lwz       RTOC,0x0014(SP)           ; restore TOC
+00A0 0020   X      38600000               li        r3,0                      ; return 0
+00A4 0024          38210040               addi      SP,SP,64
+00A8 0028          80010008               lwz       r0,0x0008(SP)
+00AC 002C   X      7C0803A6               mtlr      r0
+00B0 0030   X      4E800020               blr
+; ===========================================================================
+; __start — CRT entry point (PEF entry TVector points here at offset 0x34)
+;
+; 1. Check __C_phase: if non-zero, call _BreakPoint (debugger hook)
+; 2. Set __C_phase = 2
+; 3. Call __setjmp(__target_for_exit) — save state for exit longjmp
+; 4. If setjmp returned 0 (initial call): call main(argc, argv, envp)
+;    then call exit(main_result)
+; 5. If setjmp returned non-zero (longjmp from exit): read *_exit_status
+;    and return it
+; ===========================================================================
+00B4 0034   X      7C0802A6               mflr      r0                        ; save LR
+00B8 0038          93E1FFFC               stw       r31,-0x0004(SP)           ; save r31
+00BC 003C          90010008               stw       r0,0x0008(SP)
+00C0 0040          9421FFC0               stwu      SP,-0x0040(SP)            ; frame = 64 bytes
+; --- Check __C_phase for debugger breakpoint ---
+00C4 0044          8062FFF4               lwz       r3,-0x000C(RTOC)          ; r3 = &__NubAt3
+00C8 0048          83E2FFDC               lwz       r31,-0x0024(RTOC)         ; r31 = &_IntEnv (saved for argc/argv)
+00CC 004C          80830000               lwz       r4,0x0000(r3)             ; r4 = *__NubAt3
+00D0 0050   X      2C040000               cmpwi     r4,0
+00D4 0054   X      41820010               beq       $+0x0010                  ; if __NubAt3 == 0, skip breakpoint
+00D8 0058          8062FFFC               lwz       r3,-0x0004(RTOC)          ; r3 = ptr to string data
+00DC 005C          48000061               bl        $+0x0060                  ; call _BreakPoint(r3) via glue at 0xBC
+                                                                              ; glue → RTOC-0x30 → StdCLib::_BreakPoint
+00E0 0060          80410014               lwz       RTOC,0x0014(SP)
+; --- Set __C_phase = 2 ---
+00E4 0064          8082FFE0               lwz       r4,-0x0020(RTOC)          ; r4 = &__C_phase
+00E8 0068   X      38A00002               li        r5,2
+00EC 006C          90A40000               stw       r5,0x0000(r4)             ; *__C_phase = 2
+; --- Call __setjmp(__target_for_exit) ---
+00F0 0070          8062FFE4               lwz       r3,-0x001C(RTOC)          ; r3 = &__target_for_exit (jmp_buf)
+00F4 0074          48000061               bl        $+0x0060                  ; call __setjmp(r3) via glue at 0xD4
+                                                                              ; glue → RTOC-0x2C → StdCLib::__setjmp
+00F8 0078          80410014               lwz       RTOC,0x0014(SP)           ; restore TOC
+; --- Check setjmp return value ---
+00FC 007C   X      2C030000               cmpwi     r3,0
+0100 0080   X      40820020               bne       $+0x0020                  ; if r3 != 0 (longjmp return) → cleanup at 0xA0
+; --- setjmp returned 0: call main(argc, argv, envp) ---
+0104 0084          807F0002               lwz       r3,0x0002(r31)            ; r3 = _IntEnv+2 = argc
+0108 0088          809F0006               lwz       r4,0x0006(r31)            ; r4 = _IntEnv+6 = argv
+010C 008C          80BF000A               lwz       r5,0x000A(r31)            ; r5 = _IntEnv+10 = envp
+0110 0090          4BFFFF71               bl        $-0x0090                  ; call main(argc, argv, envp) at offset 0x00
+0114 0094   X      60000000               nop                                 ; (reserved for TOC restore, unused since
+                                                                              ; main is in the same code section)
+; --- Call exit(main_result) ---
+0118 0098          48000055               bl        $+0x0054                  ; call exit(r3) via glue at 0xEC
+                                                                              ; glue → RTOC-0x14 → StdCLib::exit
+011C 009C          80410014               lwz       RTOC,0x0014(SP)           ; (never reached if exit works)
+; --- Cleanup: longjmp returned here with r3 != 0 ---
+0120 00A0          8082FFE8               lwz       r4,-0x0018(RTOC)          ; r4 = &_exit_status
+0124 00A4          80640000               lwz       r3,0x0000(r4)             ; r3 = *_exit_status (the exit code)
+0128 00A8          38210040               addi      SP,SP,64
+012C 00AC          80010008               lwz       r0,0x0008(SP)
+0130 00B0   X      7C0803A6               mtlr      r0
+0134 00B4          83E1FFFC               lwz       r31,-0x0004(SP)
+0138 00B8   X      4E800020               blr                                 ; return r3 = exit code
+; ===========================================================================
+; Cross-fragment glue stubs
+;
+; Each stub loads a TVector from the data section (via RTOC-relative offset),
+; saves the caller's RTOC on the stack, loads the target's code address and
+; TOC from the TVector, and branches via CTR.
+; ===========================================================================
+; _BreakPoint glue (called from __start offset 0x5C)
+013C 00BC          8182FFD0               lwz       r12,-0x0030(RTOC)         ; r12 = TVector for _BreakPoint
+0140 00C0          90410014               stw       RTOC,0x0014(SP)           ; save caller's TOC
+0144 00C4          800C0000               lwz       r0,0x0000(r12)            ; r0 = target code address
+0148 00C8          804C0004               lwz       RTOC,0x0004(r12)          ; RTOC = target TOC
+014C 00CC   X      7C0903A6               mtctr     r0
+0150 00D0   X      4E800420               bctr                                ; tail-call to _BreakPoint
+; __setjmp glue (called from __start offset 0x74)
+0154 00D4          8182FFD4               lwz       r12,-0x002C(RTOC)         ; r12 = TVector for __setjmp
+0158 00D8          90410014               stw       RTOC,0x0014(SP)
+015C 00DC          800C0000               lwz       r0,0x0000(r12)
+0160 00E0          804C0004               lwz       RTOC,0x0004(r12)
+0164 00E4   X      7C0903A6               mtctr     r0
+0168 00E8   X      4E800420               bctr                                ; tail-call to __setjmp
+; exit glue (called from __start offset 0x98)
+016C 00EC          8182FFEC               lwz       r12,-0x0014(RTOC)         ; r12 = TVector for exit
+0170 00F0          90410014               stw       RTOC,0x0014(SP)
+0174 00F4          800C0000               lwz       r0,0x0000(r12)
+0178 00F8          804C0004               lwz       RTOC,0x0004(r12)
+017C 00FC   X      7C0903A6               mtctr     r0
+0180 0100   X      4E800420               bctr                                ; tail-call to exit
+; fprintf glue (called from main offset 0x18)
+0184 0104          8182FFD8               lwz       r12,-0x0028(RTOC)         ; r12 = TVector for fprintf
+0188 0108          90410014               stw       RTOC,0x0014(SP)
+018C 010C          800C0000               lwz       r0,0x0000(r12)
+0190 0110          804C0004               lwz       RTOC,0x0004(r12)
+0194 0114   X      7C0903A6               mtctr     r0
+0198 0118   X      4E800420               bctr                                ; tail-call to fprintf
+
+019C There are 4 (pad?) bytes at the end of this section.
+
+     =========================================================
+
+     Pidata section 1 (<unnamed>)
+     Address    Op      Operand               Encoding/data
+01A0   00       ZERO    cnt=40                00 28
+01A2   28       RPTZERO cnt=3                 83 
+01A3                    dcnt=1                   01
+01A4                    rpt=3                    03
+01A5                                       1  38 48 34                            8H4
+01A8   37       BLK     cnt=25                39 
+01A9                                          3048656C6C6F2C20776F726C64210D00    0Hello, world!..
+01B9                                          005F5F737461727400                  .__start.
+
+           ---------------------------- Unpacked PiData ---------------------------
+     0000  00000000 00000000 00000000 00000000  00000000 00000000 00000000 00000000  ................................
+     0020  00000000 00000000 00000038 00000048  00000034 00000030 48656C6C 6F2C2077  ...........8...H...4...0Hello, w
+     0040  6F726C64 210D0000 5F5F7374 61727400                                       orld!...__start.
+
+01C2 There are 14 (pad?) bytes at the end of this section.
+
+     =========================================================
+
+     Loader section 2 (<unnamed>)
+
+     ------- Loader Header -------
+01D0 entrySection     = 0x00000001 (1)                        entry point section number
+01D4 entryOffset      = 0x00000030 (48)                       entry point descr. ldr section offset
+01D8 initSection      = 0xFFFFFFFF (-1)                       init routine section number
+01DC initOffset       = 0x00000000 (0)                        init routine descr. ldr section offset
+01E0 termSection      = 0xFFFFFFFF (-1)                       term routine section number
+01E4 termOffset       = 0x00000000 (0)                        term routine descr. ldr section offset
+01E8 nbrImportIDs     = 0x00000001 (1)                        number of import container ID entries
+01EC nbrImportSyms    = 0x0000000A (10)                       number of import symbol table entries
+01F0 nbrRelocSects    = 0x00000001 (1)                        number of relocation sections (headers)
+01F4 relocsOffset     = 0x00000084 (132)                      relocation instructions ldr section offset	
+01F8 strTblOffset     = 0x0000008C (140)                      string table ldr section offset
+01FC slotTblOffset    = 0x000000F8 (248)                      hash slot table ldr section offset
+0200 hashSlotTblSz    = 0x00000000 (0) [==> 1]                log 2 of number of hash slot entries
+0204 nbrExportSyms    = 0x00000000 (0)                        number of export symbol table entries
+
+     ------ Loader Import Container ID Table ------
+0208 [0] containerName    = 0x00000000 (0) .... StdCLib
+020C     oldImpVersion    = 0                                 old implementation version
+0210     currentVersion   = 54820864                          current version
+0214     nbrOfImports     = 10                                number of import symbols from this container
+0218     firstImport      = 0                                 first import symbol (index) to use
+021C     importFlags      = 0x00                              import container flags
+021D     reserved         = 0x000000                          <reserved>
+
+     ------ Loader Import Symbol Table ------
+          Importing from "StdCLib ; oldImpVersion 0x00000000 (0), currentVersion 0x03448000 (54820864)"
+0220 [ 0] 02 000008   TVector  _BreakPoint
+0224 [ 1] 02 000014   TVector  __setjmp
+0228 [ 2] 02 00001D   TVector  fprintf
+022C [ 3] 01 000025   Data     _IntEnv
+0230 [ 4] 01 00002D   Data     __C_phase
+0234 [ 5] 01 000037   Data     __target_for_exit
+0238 [ 6] 01 000049   Data     _exit_status
+023C [ 7] 02 000056   TVector  exit
+0240 [ 8] 01 00005B   Data     _iob
+0244 [ 9] 01 000060   Data     __NubAt3
+
+     ------ Loader Relocation Headers ------
+0248 [0] sectionNumber    = 1                                 loadable section to be relocated
+024A     reserved         = 0x0000                            <reserved>
+024C     nbrOfRelocs      = 4                                 number of loader relocation instructions
+0250     firstRelocInstr  = 0x00000000 (0)                    relocation offset to first instruction
+
+     ------ Loader Relocation Instructions ------
+         Relocations for section 1 (<unnamed>)
+         Instr     Op    Operand           codeA dataA rSymI      rAddr(s)      Relocation      Other effects/section names
+0254 [0] 6401      DTIS  sct=1               0     1     0                                      dataA = &sct 1
+0256 [1] 4A09      SYMR  cnt=10              0     1     0   00000000:00000024  ImpSym[0:9]
+0258 [2] 4201      DATA  cnt=2               0     1    10   00000028:0000002C  dataA           sct 1
+025A [3] 4600      DSC2  cnt=1               0     1    10   00000030:00000034  codeA,dataA     sct 0,sct 1
+
+     ------ Loader String Table ------
+025C 0000     8  StdCLib
+0264 0008    12  _BreakPoint
+0270 0014     9  __setjmp
+0279 001D     8  fprintf
+0281 0025     8  _IntEnv
+0289 002D    10  __C_phase
+0293 0037    18  __target_for_exit
+02A5 0049    13  _exit_status
+02B2 0056     5  exit
+02B7 005B     5  _iob
+02BC 0060     8  __NubAt3
+
+     ------ Loader Export Hash Slot Table ------
+           Slot => Count  Index
+02C8 [0] 00000000    0      0  
+
+DumpPEF complete - no errors reported.
+
