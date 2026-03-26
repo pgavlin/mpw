@@ -68,7 +68,7 @@ MPW::Init(argc, argv);  // or MPW::InitPPC(argc, argv) if separate
 PPC::Init(Memory, MemorySize);
 CFMStubs::Init();
 PPC::SetSCHandler(CFMStubs::Dispatch);
-PPCDispatch::RegisterAll();
+PPCDispatch::RegisterStdCLibImports();
 ```
 
 ### Step 4: Load StdCLib
@@ -330,7 +330,7 @@ Major changes:
    - Wire trace flags: `PPC::SetTraceCode(Flags.traceCPU)`, `CFMStubs::SetTrace(Flags.traceToolBox)`, `PEFLoader::SetTrace(Flags.traceToolBox)`
    - CFMStubs::Init
    - PPC::SetSCHandler
-   - PPCDispatch::RegisterAll
+   - PPCDispatch::RegisterStdCLibImports
    - Load StdCLib
    - Register exports
    - Set up exit chain

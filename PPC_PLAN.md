@@ -176,59 +176,29 @@ namespace CFMStubs {
 
 ---
 
-## Phase 4: InterfaceLib Wrappers
+## Phase 4: StdCLib InterfaceLib/MathLib Wrappers
 
-**Goal:** Implement the InterfaceLib functions that StdCLib imports, bridging PPC calling convention to existing `Native::` APIs.
+**Goal:** Implement exactly the 66 functions that StdCLib imports from InterfaceLib (60), MathLib (4), and PrivateInterfaceLib (2).
 
-StdCLib imports ~60 symbols from InterfaceLib. The minimum set for Hello World:
+StdCLib's imports were verified via DumpPEF. We do NOT load InterfaceLib/MathLib PEFs (they are stub libraries with no code). Our CFM stubs ARE the implementation.
 
-### Memory Manager (bridge to `MM::Native`)
-- `NewPtr(size)` → r3=size, return r3=ptr
-- `NewPtrClear(size)` → same with clear flag
-- `DisposePtr(ptr)` → r3=ptr
-- `GetPtrSize(ptr)` → r3=ptr, return r3=size
-- `NewHandle(size)`, `DisposeHandle(handle)`, `HLock(handle)`, `HUnlock(handle)`
-- `GetHandleSize(handle)`, `SetHandleSize(handle, size)`
-- `BlockMoveData(src, dst, size)` → memcpy in emulated memory
-- `HandleZone()`, `GetZone()` → return zone pointer
-
-### File Manager (bridge to `OS::Native`)
-- `PBOpenSync(pb)` / `PBHOpenSync(pb)` → r3=paramBlock pointer. **Must map "stdin"/"stdout"/"stderr" filenames to host fds 0/1/2.**
-- `PBReadSync(pb)`, `PBWriteSync(pb)`, `PBCloseSync(pb)`
-- `PBGetFCBInfoSync(pb)`
-
-### Trap Manager
-- `NGetTrapAddress(trapNum, tType)` → return trap glue address (StdCLib checks TrapAvailable)
-- `GetToolTrapAddress(trapNum)`, `GetOSTrapAddress(trapNum)`
-
-### Gestalt Manager
-- `Gestalt(selector, &response)` → r3=selector, r4=response ptr
-
-### Mixed Mode Manager
-- `NewRoutineDescriptor(procPtr, procInfo, ISA)` → for PPC, pass through the TVector pointer (not a real routine descriptor)
-- `DisposeRoutineDescriptor(rd)` → dispose if not a TVector passthrough
-- `CallUniversalProc(procPtr, procInfo, args...)` → PPC trampoline (see below)
-
-### CallUniversalProc Trampoline
-This is **real PPC code** allocated in emulated memory. When StdCLib calls `CallUniversalProc`, the trampoline:
-1. Loads the first halfword from procPtr
-2. If `0xAAFE` → it's a 68K routine descriptor → dispatch to an sc stub that handles 68K interop
-3. Otherwise → it's a PPC TVector → load `{code, toc}`, set r2=toc, branch to code
-
-The trampoline is ~10-15 PPC instructions. It's registered as the CFM stub for `CallUniversalProc` but its code_addr points to the real PPC trampoline code rather than an sc stub.
-
-### Other
-- `GetEmulatorRegister` → return 0 (not under 68K emulation)
-- `Munger` → string manipulation utility
-- `ReadDateTime`, `SecondsToDate`, `TickCount`
-- `LMGetMemErr` / `MemError` → read from low memory global
+Key wrappers: Memory Manager (NewPtr, DisposePtr, NewHandle, etc.), File Manager (PBHOpenSync with stdin/stdout/stderr mapping, FSRead, FSWrite, etc.), Gestalt, NGetTrapAddress, Mixed Mode Manager (NewRoutineDescriptor, CallUniversalProc trampoline), MathLib decimal conversion (str2dec, dec2num, num2decl), string conversions (c2pstr, p2cstr), process manager, time functions.
 
 ### Files
 - `toolbox/ppc_dispatch.h`
 - `toolbox/ppc_dispatch.cpp`
 
 ### Verification
-- Load StdCLib PEF, run its `__initialize` entry point, verify it completes without crashing. ECON ioctl calls should fire. Check that stdout's FILE structure gets the line-buffer flag set.
+- Load StdCLib with CFM resolver — all 66 imports resolve with 0 catch-alls.
+- Call StdCLib's `__initialize` — should complete without crashing.
+
+---
+
+## Phase 4b: Additional InterfaceLib Wrappers for Tools
+
+**Goal:** Implement additional InterfaceLib wrappers that PPC tools import directly (beyond what StdCLib needs). Demand-driven — add as tools require them.
+
+Likely symbols: NewPtrClear, NewHandleClear, GetHandleSize, BlockMoveData, Resource Manager extras (GetResource, OpenResFile, etc.), PBReadSync, PBWriteSync, FindFolder, etc.
 
 ---
 
