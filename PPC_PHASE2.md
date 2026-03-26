@@ -59,38 +59,44 @@ PEF is the executable format for PowerPC Mac OS. A PEF container holds code, dat
 
 ### Loader Section Header (56 bytes at start of loader section data)
 ```
-+0x00: int32  mainSection        (-1 if no main entry)
++0x00: int32  mainSection           (-1 if no main entry)
 +0x04: uint32 mainOffset
-+0x08: int32  initSection        (-1 if no init)
++0x08: int32  initSection           (-1 if no init)
 +0x0C: uint32 initOffset
-+0x10: int32  termSection        (-1 if no term)
++0x10: int32  termSection           (-1 if no term)
 +0x14: uint32 termOffset
 +0x18: uint32 importedLibraryCount
 +0x1C: uint32 totalImportedSymbolCount
 +0x20: uint32 relocSectionCount
-+0x24: uint32 relocInstrOffset   (from loader section start)
-+0x28: uint32 loaderStringsOffset (from loader section start)
-+0x2C: uint32 exportHashOffset   (from loader section start)
-+0x30: uint32 exportHashTablePower
++0x24: uint32 relocInstrOffset      (from loader section start)
++0x28: uint32 loaderStringsOffset   (from loader section start)
++0x2C: uint32 exportHashOffset      (from loader section start)
++0x30: uint32 exportHashTablePower  (log2)
 +0x34: uint32 exportedSymbolCount
 ```
 
 ### Imported Library (24 bytes each, starting at loader+56)
 ```
-+0x00: uint32 nameOffset       (into loader string table)
++0x00: uint32 nameOffset           (into loader string table)
 +0x04: uint32 oldImpVersion
 +0x08: uint32 currentVersion
-+0x0C: uint32 importedSymbolCount
-+0x10: uint32 firstImportedSymbol
-+0x14: uint8  options
++0x0C: uint32 importedSymbolCount  (number of symbols imported from this library)
++0x10: uint32 firstImportedSymbol  (zero-based index of the first entry in the imported symbol table for this library)
++0x14: uint8  options              (contains bit flags for the import)
 +0x15: uint8  reservedA
 +0x16: uint16 reservedB
 ```
 
+### Imported Library options
+
+- **High-order bit (mask 0x80)**: controls the order that the import libraries are initialized. If set to 0, the default initialization order is used, which specifies that the Code Fragment Manager should _try_ to initialize the import library before the fragment that imports it. When set to 1, the import library **must** be initialized before the client fragment.
+- **Next bit (maks 0x40)**: controls whether the import library is weak. When set to 1 (weak import), the Code Fragment Manager continues preparation of the client fragment (and does not generate an error) even if the import library cannot be found. If the import library is not found, all imported symbols from that library have their addresses set to 0. You can use this information to determine whether a weak import library is actually present.
+
 ### Imported Symbol (4 bytes each, after all ImportedLibrary entries)
 ```
 +0x00: uint32 classAndName
-         bits 31-24: symbol class (0=code, 1=data, 2=tvector, 3=toc, 4=glue)
+         bits 31-28: symbol flags (0x80=weak, does not have to be present at prep time)
+         bits 27-24: symbol class (0=code, 1=data, 2=tvector, 3=toc, 4=glue)
          bits 23-0:  name offset into loader string table
 ```
 
@@ -102,45 +108,108 @@ Hash table: (1 << exportHashTablePower) entries of uint32
   bits 17-0:  chain index (index into export key + symbol tables)
 
 Export key table: exportedSymbolCount entries of uint32
-  bits 31-16: hash word (for verification)
-  bits 15-0:  string length
+  bits 31-16: string length
+  bits 15-0:  hash word (for verification)
 
 Exported symbol table: exportedSymbolCount entries of 10 bytes each
   +0x00: uint32 classAndName
-  +0x04: uint32 symbolValue (offset within section)
-  +0x08: int16  sectionIndex (-1 for abs symbols)
+  +0x04: uint32 symbolValue  (offset within section)
+  +0x08: int16  sectionIndex (-2 for abs symbols, -3 for re-exported symbols)
+```
+
+#### Name to Hash Word function
+
+**NOTE**: this function uses Macintosh data types. Integers are big-endian.
+
+```c
+/* Computes a hash word for a given string. nameText points to the */
+/* first character of the string (not the Pascal length byte). The */
+/* string may be null terminated. */
+enum {
+    kPEFHashLengthShift = 16,
+    kPEFHashValueMask = 0x0000FFFF
+};
+
+UInt32 PEFComputeHashWord(BytePtr nameText, UInt32 nameLength)
+{
+    BytePtr charPtr = nameText;
+    SInt32 hashValue = 0;
+    UInt32 length = 0;
+    UInt32 limit;
+    UInt32 result;
+    UInt8 currChar;
+
+    #define PseudoRotate(x) ( ( (x) << 1 ) - ( (x) >> 16 ))
+
+    for (limit = nameLength; limit > 0; limit -= 1)
+    {
+        currChar = *charPtr++;
+        if (currChar == NULL) break;
+        length += 1;
+        hashValue = PseudoRotate (hashValue) ^ currChar;
+    }
+
+    result = (length << kPEFHashLengthShift) |
+    ((UInt16) ((hashValue ^ (hashValue >> 16)) & kPEFHashValueMask));
+    return result;
+} /* PEFComputeHashWord () */
+```
+
+#### Hash word to index function
+
+**NOTE**: this function uses Macintosh data types. Integers are big-endian.
+
+```c
+#define PEFHashTableIndex(fullHashWord,hashTablePower) \
+    ( ( (fullHashWord) ^ ((fullHashWord) >> (hashTablePower)) ) & \
+    ((1 << (hashTablePower)) - 1) )
 ```
 
 ### Relocation Headers
+
 After the imported symbols, `relocSectionCount` headers of 12 bytes:
+
 ```
-+0x00: uint16 sectionIndex
++0x00: uint16 sectionIndex (section number to which this relocation header refers)
 +0x02: uint16 reservedA
 +0x04: uint32 relocCount (number of 16-bit relocation instructions)
 +0x08: uint32 firstRelocOffset (from relocInstrOffset)
 ```
 
 ### Relocation Opcodes (16-bit instructions)
-Relocations use a virtual machine with:
-- `relocAddress`: current address being patched (initialized to section start)
-- `sectionC`: base address of the current code section
-- `sectionD`: base address of the current data section
-- `importIndex`: current import index
 
-Key opcodes (upper bits determine opcode, lower bits are operand):
+Relocations use a virtual machine with:
+
+- `relocAddress`: current address being patched (initialized to section start)
+- `sectionC`: memory address of an instantiated section within the PEF container (initial value is the memory address of section 0 if that section is present and instantiated. Otherwise the initial value is 0)
+- `sectionD`: memory address of an instantiated section within the PEF container (initial value is the memory address of section 1 if that section is present and instantiated. Otherwise the initial value is 0)
+- `importIndex`: current import index (initialized to 0)
+
+**NOTE**: The sectionC and sectionD variables actually contain the memory address of an instantiated section minus the default address for that section. The default address for a section is contained in the defaultAddress field of the section header. However, in almost all cases the default address should be 0, so the simplified definition suffices.
+
+All opcodes (upper bits determine opcode, lower bits are operand):
 
 | Opcode | Bits | Meaning |
 |--------|------|---------|
-| RelocBySectDWithLength | `00xxxxxx xxxxxxxx` | Patch `count+1` words at relocAddress with `*addr + sectionD` |
-| RelocBySectC | `0010000x xxxxxxxx` | Patch words with `*addr + sectionC` |
-| RelocTVector8 | `0011100x xxxxxxxx` | Patch 8-byte TVectors (code+data reloc) |
-| RelocImportRun | `0100100x xxxxxxxx` | Patch `count+1` words with import addresses |
-| RelocSmByImport | `0101iiii` | Patch one word with import[importIndex + i] |
-| RelocSmSetSectC | `010101ss` | Set sectionC = section[s].address |
-| RelocSmSetSectD | `010110ss` | Set sectionD = section[s].address |
-| RelocIncrPosition | `011000nn nnnnnnnn` | Advance relocAddress by `(offset+1)*4` |
-| RelocSetPosition | `0110100x xxxxxxxx` | Set relocAddress = section base + offset |
-| RelocLgByImport | `01101010 xxxxxxxx` | Patch one word with import[index] (large index) |
+| RelocBySectDWithSkip | `00ssssss ssrrrrrr` | Increment relocAddress by s words, then add sectionD to the next `r+1` words |
+| RelocBySectC | `0100000l llllllll` | Add sectionC to the next l+1 words |
+| RelocBySectD | `0100001l llllllll` | Add sectionD to the next l+1 words |
+| RelocTVector12 | `0100010l llllllll` | Patch l+1 12-byte TVectors (add sectionC to word 0, sectionD to word 1, and 0 to word 2) |
+| RelocTVector8 | `0100011l llllllll` | Patch l+1 8-byte TVectors (add sectionC to word 0 and sectionD to word 1) |
+| RelocVTable8 | `0100100l llllllll` | Patch l+1 8-byte VTables (add sectionD to word 0 and 0 to word 1) |
+| RelocImportRun | `0100100l llllllll` | Patch l+1 words with import addresses. importIndex is incremented after every word |
+| RelocSmByImport | `0110000i iiiiiiii` | Patch one word with import[i], then set importIndex to i+1 |
+| RelocSmSetSectC | `0110001i iiiiiiii` | Set sectionC = section[i].address |
+| RelocSmSetSectD | `0110010i iiiiiiii` | Set sectionD = section[i].address |
+| RelocSmBySection | `0110011i iiiiiiii` | Patch one word with the seciton[i].address |
+| RelocIncrPosition | `1000oooo oooooooo` | Advance relocAddress by o+1 words |
+| RelocSmRepeat | `1001bbbb rrrrrrrr` | Repeat the preceeding b+1 relocation blocks r+1 times |
+| RelocSetPosition | `101000oo oooooooo oooooooo oooooooo` | Set relocAddress to section offset o |
+| RelocLgByImport | `101001oo oooooooo oooooooo oooooooo` | Patch one word with import[o], then set importIndex to o+1 |
+| RelocLgRepeat | `101100bb bbrrrrrr rrrrrrrr rrrrrrrr` | Repeat the preceeding b+1 relocation blocks r times |
+| RelocLgBySection | `10110100 00iiiiii iiiiiiii` | Patch one word with the seciton[i].address |
+| RelocLgSetSectC | `10110100 01iiiiii iiiiiiii` | Set sectionC = section[i].address |
+| RelocLgSetSectD | `10110100 10iiiiii iiiiiiii` | Set sectionD = section[i].address |
 
 ### Pattern-Initialized Data (pidata) Decompression
 
@@ -149,17 +218,15 @@ The pidata format uses a stream of opcodes:
 Repeat until output is complete:
   Read opcode byte:
     bits 7-5: opcode type
-    bits 4-0: count (or first count byte)
+    bits 4-0: count
 
   Opcode 0 (000xxxxx): Zero fill — write `count` zero bytes
   Opcode 1 (001xxxxx): Block copy — copy `count` bytes from packed stream
-  Opcode 2 (010xxxxx): Repeat block — read customSize+commonSize data, then:
-    repeat `count` times: write customSize bytes (different each time) + commonSize bytes (same each time)
-  Opcode 3 (011xxxxx): Interleave with repeat block
-  Opcode 4 (100xxxxx): Interleave with block copy
+  Opcode 2 (010xxxxx): Repeat block — read packed `repeatCount`, copy `count` bytes from packed stream `repeatCount+1` times
+  Opcode 3 (011xxxxx): Interleave repeat block with block copy — read packed `customSize` and `repeatCount`, then read `count` bytes of commonData, then `repeatCount` blocks of `customSize` bytes. Then loop: for i < repeatCount, write commonData, then customData[i], then increment i. Finally write one last commonData.
+  Opcode 4 (100xxxxx): Interleave repeat block with zero - read packed `customSize` and `repeatCount`, then `repeatCount` blocks of `customSize` bytes. Then loop: for i < repeatCount, write count bytes of 0, then customData[i], then increment i. Finally write one last block of count 0 bytes.
 
-  Counts > 31 use "packed count" encoding: if high bit set, read additional
-  7-bit bytes until a byte < 0x80 is found.
+  Counts > 31 use "packed count" encoding: if high bit set, read additional 7-bit bytes until a byte < 0x80 is found.
 ```
 
 ---
