@@ -8,17 +8,35 @@
 
 ## Overview
 
-When PPC code calls an imported function (e.g., `InterfaceLib::NewPtr`), it goes through a Transition Vector (TVector). Normally, the TVector would point to real PPC code in a shared library. For functions we implement natively (in C++), we instead point the TVector to a small stub that executes an `sc` (system call) instruction. Our sc handler then dispatches to the appropriate C++ function.
+### Stub libraries vs real libraries
+
+Inspection of the actual MPW shared libraries with `DumpPEF` reveals two distinct kinds:
+
+**Stub libraries (InterfaceLib, MathLib, PrivateInterfaceLib):** These contain **no code and no data** — only a loader section with an export table. Every export has `address=0` and `sectionNumber=-2` (absolute/external). On a real Mac, CFM would resolve these against the Toolbox ROM. In our emulator, **the CFM stub system IS the implementation of these libraries.** We do not load their PEFs at all.
+
+- InterfaceLib: 2489 TVector exports, 0 loadable sections, 0 imports
+- MathLib: 177 TVector exports, 0 loadable sections, 0 imports
+- PrivateInterfaceLib: similar pattern
+
+**Real libraries (StdCLib):** These contain actual PPC code and data sections with real exports at real addresses. We load these via the PEF loader (Phase 2) and run their native PPC code. Their imports from stub libraries are resolved against our CFM stubs.
+
+### Two resolution paths
+
+When loading a PEF that imports symbols:
+
+1. **Import from a stub library** (InterfaceLib, MathLib, PrivateInterfaceLib): Resolved by `CFMStubs::ResolveImport()` → returns TVector address of our native C++ handler.
+2. **Import from a real library** (StdCLib): Resolved by `PEFLoader::FindExport()` on the loaded library → returns the real TVector address in emulated memory. These are registered via `CFMStubs::RegisterTVector()` so the resolver has a single lookup point.
 
 ### Stub Execution Flow
 
+When PPC code calls through one of our stub TVectors:
+
 1. PPC code calls through a TVector: loads `{code_addr, toc}`, sets r2=toc, branches to code_addr
-2. The stub code at code_addr is: `li r11, <index>; sc; blr`
+2. The stub code at code_addr is: `li r11, <index>; sc`
 3. The `sc` instruction triggers the interrupt hook registered in Phase 1
-4. The hook reads r11 to get the stub index, looks up the handler, and calls it
+4. The hook dispatches to `CFMStubs::Dispatch()`, which reads r11 to get the stub index and calls the handler
 5. The handler reads PPC registers (r3-r10 for args), does its work, writes results (r3 for return)
-6. The hook sets PC = SRR0 (return past the `sc` instruction)
-7. The `blr` instruction returns to the caller
+6. The hook sets PC = LR (return to the caller, since our Phase 1 sc handler returns via LR)
 
 ### Why `li r11, <index>` before `sc`?
 

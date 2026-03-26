@@ -131,6 +131,10 @@ namespace PEFLoader {
 
 **Goal:** Provide a mechanism to register native C++ handlers for imported shared library symbols.
 
+### Key finding: InterfaceLib/MathLib are stub libraries
+
+DumpPEF analysis reveals that InterfaceLib, MathLib, and PrivateInterfaceLib contain **no code and no data** — only a loader section with an export catalog (all exports have address=0, sectionNumber=-2). On a real Mac, CFM resolves these against the Toolbox ROM. In our emulator, the CFM stub system IS the implementation of these libraries. We do NOT load their PEFs.
+
 ### Design
 When the PEF loader resolves an import (e.g., `InterfaceLib::NewPtr`), the CFM stub system:
 1. Allocates a **TVector** in emulated memory: `{code_addr, toc}` (8 bytes)

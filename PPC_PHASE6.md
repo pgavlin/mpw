@@ -84,12 +84,20 @@ PEFLoader::LoadResult stdclibResult;
 bool ok = PEFLoader::LoadPEFFile(stdclibPath, cfmResolver, stdclibResult);
 ```
 
-The `cfmResolver` callback:
+The `cfmResolver` callback resolves StdCLib's imports against our registered stubs. InterfaceLib, MathLib, and PrivateInterfaceLib are **stub libraries** (no code, only export catalogs) — we do NOT load their PEFs. Our CFM stubs from Phase 4 ARE the implementation:
+
 ```cpp
 auto cfmResolver = [](const std::string &lib, const std::string &sym, uint8_t cls) -> uint32_t {
     uint32_t addr = CFMStubs::ResolveImport(lib, sym);
     if (!addr) {
-        fprintf(stderr, "PPC: unresolved import %s::%s\n", lib.c_str(), sym.c_str());
+        // Register catch-all for unimplemented stubs
+        addr = CFMStubs::RegisterStub(lib, sym, [lib, sym]() {
+            fprintf(stderr, "PPC FATAL: unimplemented stub %s::%s called\n",
+                    lib.c_str(), sym.c_str());
+            fprintf(stderr, "  r3=0x%08X r4=0x%08X LR=0x%08X\n",
+                    PPC::GetGPR(3), PPC::GetGPR(4), PPC::GetLR());
+            PPC::Stop();
+        });
     }
     return addr;
 };

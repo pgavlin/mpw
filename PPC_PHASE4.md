@@ -8,7 +8,11 @@
 
 ## Overview
 
-StdCLib imports ~60-80 symbols from InterfaceLib, plus a few from MathLib and PrivateInterfaceLib. Each wrapper:
+As discovered in Phase 3 analysis, InterfaceLib, MathLib, and PrivateInterfaceLib are **stub libraries** — PEFs with no code or data, only export catalogs. On a real Mac, CFM resolves these exports against the Toolbox ROM. In our emulator, this phase provides the actual implementations.
+
+We do NOT load InterfaceLib's PEF. Instead, we register a native C++ handler for each function that StdCLib (or the tool) actually imports. The CFM stub system from Phase 3 allocates a TVector with an `sc` instruction for each handler. When StdCLib calls `NewPtr`, it goes through a TVector that triggers our `sc` handler, which calls `MM::Native::NewPtr`.
+
+StdCLib imports 60 symbols from InterfaceLib, 4 from MathLib, and 2 from PrivateInterfaceLib. Each wrapper:
 1. Reads arguments from PPC registers (r3-r10 for integers, f1-f13 for floats)
 2. Calls the corresponding existing `Native::` API or implements the function directly
 3. Writes the return value to r3 (or f1 for floats)
@@ -423,15 +427,24 @@ assert(CFMStubs::ResolveImport("MathLib", "str2dec") != 0);
 
 ### StdCLib load test
 
-Use Phase 2's PEF loader to load StdCLib with the CFM resolver. All (or nearly all) imports should resolve. Log any unresolved imports — these are stubs we need to add:
+Use Phase 2's PEF loader to load StdCLib with a resolver that checks CFM stubs first, then registers catch-all handlers for anything missing. Since InterfaceLib/MathLib/PrivateInterfaceLib are stub libraries (no code), we do NOT load their PEFs — our registered stubs ARE the implementation:
 
 ```cpp
-PEFLoader::LoadPEFFile(stdclibPath, [](auto &lib, auto &sym, auto cls) {
+auto resolver = [](const std::string &lib, const std::string &sym, uint8_t cls) -> uint32_t {
     uint32_t addr = CFMStubs::ResolveImport(lib, sym);
-    if (!addr) fprintf(stderr, "MISSING: %s::%s\n", lib.c_str(), sym.c_str());
+    if (!addr) {
+        // Register catch-all that logs and halts
+        addr = CFMStubs::RegisterStub(lib, sym, [lib, sym]() {
+            fprintf(stderr, "PPC FATAL: unimplemented stub %s::%s\n", lib.c_str(), sym.c_str());
+            PPC::Stop();
+        });
+    }
     return addr;
-}, stdclibResult);
+};
+PEFLoader::LoadPEFFile(stdclibPath, resolver, stdclibResult);
 ```
+
+All 66 imports (60 InterfaceLib + 4 MathLib + 2 PrivateInterfaceLib) should resolve against our registered stubs. If we missed any, the catch-all handler will fire at runtime with a clear error message.
 
 ### StdCLib init test
 

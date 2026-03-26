@@ -256,7 +256,7 @@ static bool relocateSection(
 					for (uint32_t j = 0; j < runLen; j++) {
 						relocWord(sectionC);
 						relocWord(sectionD);
-						relocWord(sectionD);
+						relocWord(0);
 					}
 					break;
 				case 3: // RelocTVector8
@@ -268,7 +268,7 @@ static bool relocateSection(
 				case 4: // RelocVTable8
 					for (uint32_t j = 0; j < runLen; j++) {
 						relocWord(sectionD);
-						relocWord(sectionD);
+						relocWord(0);
 					}
 					break;
 				case 5: // RelocImportRun
