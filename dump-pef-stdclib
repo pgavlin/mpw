@@ -16344,42 +16344,67 @@ resource 'cfrg' (0) {
 0FCC0 0FC40   X      7C0803A6               mtlr      r0                        ; LR = 8
 0FCC4 0FC44          83E1FFFC               lwz       r31,-0x0004(SP)
 0FCC8 0FC48   X      4E800020               blr
-0FCCC 0FC4C          80A2FFFC               lwz       r5,-0x0004(RTOC)
-0FCD0 0FC50          81250016               lwz       r9,0x0016(r5)
+; ===========================================================================
+; _DoExitProcs — walk and execute atexit-registered cleanup handlers
+;
+; Exported as _DoExitProcs. Called from _RTExit during exit().
+; Walks a table of handler pointers in _IntEnv+0x16, from index r3 down
+; to index r4. For each non-NULL entry, calls CallUniversalProc(handler, 1)
+; then DisposeRoutineDescriptor(handler), then clears the slot.
+;
+; Args: r3 = high index (exclusive end), r4 = low index (start)
+; Called as _DoExitProcs(0x2C, 5) from _RTExit — scans entries 44..5
+;
+; Key data:
+;   _IntEnv+0x16 = pointer to atexit handler table (each entry is 4 bytes)
+;   Entry value: 0 = empty slot, non-zero = routine descriptor/TVector
+; ===========================================================================
+0FCCC 0FC4C          80A2FFFC               lwz       r5,-0x0004(RTOC)          ; r5 = &_IntEnv (RTOC-4)
+0FCD0 0FC50          81250016               lwz       r9,0x0016(r5)             ; r9 = *(_IntEnv+0x16) = table base
 0FCD4 0FC54   X      28090000               cmplwi    r9,0x0000
-0FCD8 0FC58   X      4D820020               beqlr
-0FCDC 0FC5C   X      7C0802A6               mflr      r0                        ; LR = 8
+0FCD8 0FC58   X      4D820020               beqlr                               ; if table==NULL, return immediately
+; --- Prologue ---
+0FCDC 0FC5C   X      7C0802A6               mflr      r0
 0FCE0 0FC60          BF81FFF0               stmw      r28,-0x0010(SP)
 0FCE4 0FC64          90010008               stw       r0,0x0008(SP)
-0FCE8 0FC68          9421FFB0               stwu      SP,-0x0050(SP)
-0FCEC 0FC6C   X      5466103A               slwi      r6,r3,2
-0FCF0 0FC70   X      549E103A               slwi      r30,r4,2
-0FCF4 0FC74          7FE64A14               add       r31,r6,r9
-0FCF8 0FC78          7D3E4A14               add       r9,r30,r9
-0FCFC 0FC7C   X      3B800000               li        r28,0
-0FD00 0FC80   X      7C1F4840               cmplw     r31,r9
-0FD04 0FC84   X      7CBD2B78               mr        r29,r5
-0FD08 0FC88   X      41800040               blt       $+0x0040                  ; 0x0000FCC8
-0FD0C 0FC8C          807F0000               lwz       r3,0x0000(r31)
+0FCE8 0FC68          9421FFB0               stwu      SP,-0x0050(SP)            ; frame = 80 bytes
+; --- Compute scan range ---
+0FCEC 0FC6C   X      5466103A               slwi      r6,r3,2                   ; r6 = r3 * 4 (high bound byte offset)
+0FCF0 0FC70   X      549E103A               slwi      r30,r4,2                  ; r30 = r4 * 4 (low bound byte offset)
+0FCF4 0FC74          7FE64A14               add       r31,r6,r9                 ; r31 = table + high*4 (scan start)
+0FCF8 0FC78          7D3E4A14               add       r9,r30,r9                 ; r9 = table + low*4 (scan end)
+0FCFC 0FC7C   X      3B800000               li        r28,0                     ; r28 = 0 (used to clear slots)
+0FD00 0FC80   X      7C1F4840               cmplw     r31,r9                    ; initial check: any entries?
+0FD04 0FC84   X      7CBD2B78               mr        r29,r5                    ; r29 = &_IntEnv (saved for re-reads)
+0FD08 0FC88   X      41800040               blt       $+0x0040                  ; if r31 < r9 → skip loop (0xFCC8)
+; --- Loop: scan table[high..low] backwards ---
+0FD0C 0FC8C          807F0000               lwz       r3,0x0000(r31)            ; r3 = table[current_index]
 0FD10 0FC90   X      28030000               cmplwi    r3,0x0000
-0FD14 0FC94   X      41820028               beq       $+0x0028                  ; 0x0000FCBC
-0FD18 0FC98   X      38800001               li        r4,1
-0FD1C 0FC9C          48001281               bl        $+0x1280                  ; 0x00010F1C
+0FD14 0FC94   X      41820028               beq       $+0x0028                  ; if NULL → skip to decrement (0xFCBC)
+; --- Non-NULL entry: call the handler, then dispose it ---
+0FD18 0FC98   X      38800001               li        r4,1                      ; r4 = 1 (procInfo)
+0FD1C 0FC9C          48001281               bl        $+0x1280                  ; call CallUniversalProc(handler, 1)
+                                                                                ; glue at 0x10F1C → InterfaceLib::CallUniversalProc
 0FD20 0FCA0          80410014               lwz       RTOC,0x0014(SP)
-0FD24 0FCA4          807F0000               lwz       r3,0x0000(r31)
-0FD28 0FCA8          4800128D               bl        $+0x128C                  ; 0x00010F34
+0FD24 0FCA4          807F0000               lwz       r3,0x0000(r31)            ; reload handler ptr
+0FD28 0FCA8          4800128D               bl        $+0x128C                  ; call DisposeRoutineDescriptor(handler)
+                                                                                ; glue at 0x10F34 → InterfaceLib::DisposeRoutineDescriptor
 0FD2C 0FCAC          80410014               lwz       RTOC,0x0014(SP)
-0FD30 0FCB0          939F0000               stw       r28,0x0000(r31)
-0FD34 0FCB4          801D0016               lwz       r0,0x0016(r29)
-0FD38 0FCB8          7D20F214               add       r9,r0,r30
-0FD3C 0FCBC   X      3BFFFFFC               subi      r31,r31,4
-0FD40 0FCC0   X      7C1F4840               cmplw     r31,r9
-0FD44 0FCC4   X      4080FFC8               bge       $-0x0038                  ; 0x0000FC8C
+0FD30 0FCB0          939F0000               stw       r28,0x0000(r31)           ; clear slot: table[index] = 0
+; Re-read table base (may have changed if handler modified _IntEnv)
+0FD34 0FCB4          801D0016               lwz       r0,0x0016(r29)            ; r0 = *(_IntEnv+0x16) re-read
+0FD38 0FCB8          7D20F214               add       r9,r0,r30                 ; r9 = table_base + low*4 (updated)
+; --- Decrement and loop ---
+0FD3C 0FCBC   X      3BFFFFFC               subi      r31,r31,4                 ; r31 -= 4 (next lower entry)
+0FD40 0FCC0   X      7C1F4840               cmplw     r31,r9                    ; r31 >= r9?
+0FD44 0FCC4   X      4080FFC8               bge       $-0x0038                  ; if yes → continue loop (0xFC8C)
+; --- Epilogue ---
 0FD48 0FCC8          38210050               addi      SP,SP,80
 0FD4C 0FCCC          80010008               lwz       r0,0x0008(SP)
-0FD50 0FCD0   X      7C0803A6               mtlr      r0                        ; LR = 8
+0FD50 0FCD0   X      7C0803A6               mtlr      r0
 0FD54 0FCD4          BB81FFF0               lmw       r28,-0x0010(SP)
 0FD58 0FCD8   X      4E800020               blr
+; end _DoExitProcs
 0FD5C 0FCDC   X      548AF0BE               srwi      r10,r4,2
 0FD60 0FCE0   X      39800000               li        r12,0
 0FD64 0FCE4   X      2C0A0000               cmpwi     r10,0
