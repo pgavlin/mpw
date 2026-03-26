@@ -15395,116 +15395,164 @@ resource 'cfrg' (0) {
 0EF0C 0EE8C          BA81FFD0               lmw       r20,-0x0030(SP)
 0EF10 0EE90          7D838120               mtcrf     56,r12
 0EF14 0EE94   X      4E800020               blr
-0EF18 0EE98   X      7C0802A6               mflr      r0                        ; LR = 8
+; ===========================================================================
+; _RTInit — C runtime initialization
+;
+; Called from __initialize after shared_init_helper returns.
+; Called with args (0, 0, 0, 0, 0) from __initialize.
+; Calls CFM_connection_init again (idempotent), then walks constructor
+; lists and writes __target_for_exit into _IntEnv+0x16 chain.
+;
+; Register assignments:
+;   r24 = RTOC+0x1C0C (global var 1)
+;   r25 = arg r4 (caller's output ptr, NULL from __initialize)
+;   r26 = arg r5 (NULL)
+;   r27 = arg r6 (NULL)
+;   r28 = RTOC+0x1C14 (global var 2)
+;   r29 = *(RTOC-0x28) → ptr to some struct
+;   r30 = RTOC+0x1BD0 = &StandAlone
+;   r31 = arg r7 (NULL)
+; ===========================================================================
+0EF18 0EE98   X      7C0802A6               mflr      r0
 0EF1C 0EE9C          BF01FFE0               stmw      r24,-0x0020(SP)
 0EF20 0EEA0          90010008               stw       r0,0x0008(SP)
-0EF24 0EEA4          9421FFA0               stwu      SP,-0x0060(SP)
-0EF28 0EEA8          3B021C0C               addi      r24,RTOC,7180
-0EF2C 0EEAC   X      7CBA2B78               mr        r26,r5
-0EF30 0EEB0          3B821C14               addi      r28,RTOC,7188
-0EF34 0EEB4   X      7CFF3B78               mr        r31,r7
-0EF38 0EEB8          83A2FFD8               lwz       r29,-0x0028(RTOC)
-0EF3C 0EEBC   X      7CDB3378               mr        r27,r6
-0EF40 0EEC0          3BC21BD0               addi      r30,RTOC,7120
-0EF44 0EEC4   X      7C992378               mr        r25,r4
+0EF24 0EEA4          9421FFA0               stwu      SP,-0x0060(SP)            ; frame = 96 bytes
+0EF28 0EEA8          3B021C0C               addi      r24,RTOC,7180             ; r24 = RTOC+0x1C0C
+0EF2C 0EEAC   X      7CBA2B78               mr        r26,r5                    ; r26 = arg5 (NULL)
+0EF30 0EEB0          3B821C14               addi      r28,RTOC,7188             ; r28 = RTOC+0x1C14
+0EF34 0EEB4   X      7CFF3B78               mr        r31,r7                    ; r31 = arg7 (NULL)
+0EF38 0EEB8          83A2FFD8               lwz       r29,-0x0028(RTOC)         ; r29 = *(RTOC-0x28)
+0EF3C 0EEBC   X      7CDB3378               mr        r27,r6                    ; r27 = arg6 (NULL)
+0EF40 0EEC0          3BC21BD0               addi      r30,RTOC,7120             ; r30 = &StandAlone (RTOC+0x1BD0)
+0EF44 0EEC4   X      7C992378               mr        r25,r4                    ; r25 = arg4 (NULL)
+; Call CFM_connection_init again (same as shared_init_helper did)
+; Args: (stack_buf, &StandAlone, RTOC+0x1C0C, *(RTOC-0x28), RTOC+0x1C14)
 0EF48 0EEC8   X      7F05C378               mr        r5,r24
 0EF4C 0EECC   X      7FC4F378               mr        r4,r30
 0EF50 0EED0   X      7FA6EB78               mr        r6,r29
 0EF54 0EED4   X      7F87E378               mr        r7,r28
 0EF58 0EED8          38610038               addi      r3,SP,56
-0EF5C 0EEDC          48001E49               bl        $+0x1E48                  ; 0x00010D24
+0EF5C 0EEDC          48001E49               bl        $+0x1E48                  ; call CFM_connection_init (0xEBEC)
+                                                                                ; via glue at 0x10D24 → TVector RTOC+0x720
 0EF60 0EEE0          80410014               lwz       RTOC,0x0014(SP)
 0EF64 0EEE4          7C630735               extsh.    r3,r3
-0EF68 0EEE8   X      4182001C               beq       $+0x001C                  ; 0x0000EF04
+0EF68 0EEE8   X      4182001C               beq       $+0x001C                  ; if 0 → continue at 0xEF04
+; CFM_connection_init failed
 0EF6C 0EEEC   X      3860F4FB               li        r3,-2821
 0EF70 0EEF0          38210060               addi      SP,SP,96
 0EF74 0EEF4          80010008               lwz       r0,0x0008(SP)
-0EF78 0EEF8   X      7C0803A6               mtlr      r0                        ; LR = 8
+0EF78 0EEF8   X      7C0803A6               mtlr      r0
 0EF7C 0EEFC          BB01FFE0               lmw       r24,-0x0020(SP)
 0EF80 0EF00   X      4E800020               blr
-0EF84 0EF04          807E0000               lwz       r3,0x0000(r30)
-0EF88 0EF08   X      2F1F0000               cmpwi     cr6,r31,0
-0EF8C 0EF0C   X      2C030000               cmpwi     r3,0
-0EF90 0EF10   X      4182001C               beq       $+0x001C                  ; 0x0000EF2C
-0EF94 0EF14   X      409A0088               bne       cr6,$+0x0088              ; 0x0000EF9C
-0EF98 0EF18          80BD0000               lwz       r5,0x0000(r29)
-0EF9C 0EF1C          80650000               lwz       r3,0x0000(r5)
-0EFA0 0EF20          4800205D               bl        $+0x205C                  ; 0x00010F7C
+; --- CFM init OK: check StandAlone and arg7 ---
+0EF84 0EF04          807E0000               lwz       r3,0x0000(r30)            ; r3 = StandAlone
+0EF88 0EF08   X      2F1F0000               cmpwi     cr6,r31,0                 ; cr6 = (arg7 == 0)?
+0EF8C 0EF0C   X      2C030000               cmpwi     r3,0                      ; StandAlone?
+0EF90 0EF10   X      4182001C               beq       $+0x001C                  ; if StandAlone==0 → 0xEF2C
+; --- StandAlone != 0: call P2CStr on something ---
+0EF94 0EF14   X      409A0088               bne       cr6,$+0x0088              ; if arg7 != 0 → skip to 0xEF9C
+0EF98 0EF18          80BD0000               lwz       r5,0x0000(r29)            ; r5 = *(r29)
+0EF9C 0EF1C          80650000               lwz       r3,0x0000(r5)             ; r3 = *(r5)
+0EFA0 0EF20          4800205D               bl        $+0x205C                  ; call P2CStr via glue
+                                                                                ; glue at 0x10F7C → InterfaceLib::P2CStr
 0EFA4 0EF24          80410014               lwz       RTOC,0x0014(SP)
-0EFA8 0EF28          48000074               b         $+0x0074                  ; 0x0000EF9C
-0EFAC 0EF2C   X      419A0054               beq       cr6,$+0x0054              ; 0x0000EF80
-0EFB0 0EF30          83FD0000               lwz       r31,0x0000(r29)
-0EFB4 0EF34          807F0000               lwz       r3,0x0000(r31)
+0EFA8 0EF28          48000074               b         $+0x0074                  ; → 0xEF9C
+; --- StandAlone == 0 (under MPW shell) ---
+0EFAC 0EF2C   X      419A0054               beq       cr6,$+0x0054              ; if arg7==0 → 0xEF80 (skip ctors)
+; Walk constructor list 1: *(r29) is a null-terminated array of C2PStr targets
+0EFB0 0EF30          83FD0000               lwz       r31,0x0000(r29)           ; r31 = *(r29) = ctor list 1
+0EFB4 0EF34          807F0000               lwz       r3,0x0000(r31)            ; r3 = first entry
 0EFB8 0EF38   X      28030000               cmplwi    r3,0x0000
-0EFBC 0EF3C   X      4182001C               beq       $+0x001C                  ; 0x0000EF58
-0EFC0 0EF40          807F0000               lwz       r3,0x0000(r31)
-0EFC4 0EF44          48001FA9               bl        $+0x1FA8                  ; 0x00010EEC
+0EFBC 0EF3C   X      4182001C               beq       $+0x001C                  ; if NULL → done with list 1
+0EFC0 0EF40          807F0000               lwz       r3,0x0000(r31)            ; r3 = current entry
+0EFC4 0EF44          48001FA9               bl        $+0x1FA8                  ; call C2PStr(r3)
+                                                                                ; glue at 0x10EEC → InterfaceLib::C2PStr
 0EFC8 0EF48          80410014               lwz       RTOC,0x0014(SP)
-0EFCC 0EF4C          841F0004               lwzu      r0,0x0004(r31)
+0EFCC 0EF4C          841F0004               lwzu      r0,0x0004(r31)            ; advance to next, r0 = next entry
 0EFD0 0EF50   X      28000000               cmplwi    r0,0x0000
-0EFD4 0EF54   X      4082FFEC               bne       $-0x0014                  ; 0x0000EF40
-0EFD8 0EF58          83FC0000               lwz       r31,0x0000(r28)
+0EFD4 0EF54   X      4082FFEC               bne       $-0x0014                  ; loop if non-NULL
+; Walk constructor list 2: *(r28) = RTOC+0x1C14
+0EFD8 0EF58          83FC0000               lwz       r31,0x0000(r28)           ; r31 = *(RTOC+0x1C14) = ctor list 2
 0EFDC 0EF5C          807F0000               lwz       r3,0x0000(r31)
 0EFE0 0EF60   X      28030000               cmplwi    r3,0x0000
-0EFE4 0EF64   X      4182001C               beq       $+0x001C                  ; 0x0000EF80
-0EFE8 0EF68          807F0000               lwz       r3,0x0000(r31)
-0EFEC 0EF6C          48001F81               bl        $+0x1F80                  ; 0x00010EEC
+0EFE4 0EF64   X      4182001C               beq       $+0x001C                  ; if NULL → done
+0EFE8 0EF68          807F0000               lwz       r3,0x0000(r31)            ; r3 = current entry
+0EFEC 0EF6C          48001F81               bl        $+0x1F80                  ; call C2PStr(r3)
+                                                                                ; glue at 0x10EEC → InterfaceLib::C2PStr
 0EFF0 0EF70          80410014               lwz       RTOC,0x0014(SP)
 0EFF4 0EF74          841F0004               lwzu      r0,0x0004(r31)
 0EFF8 0EF78   X      28000000               cmplwi    r0,0x0000
-0EFFC 0EF7C   X      4082FFEC               bne       $-0x0014                  ; 0x0000EF68
-0F000 0EF80          8062FFC8               lwz       r3,-0x0038(RTOC)
-0F004 0EF84          8122FFB8               lwz       r9,-0x0048(RTOC)
-0F008 0EF88          80A30000               lwz       r5,0x0000(r3)
-0F00C 0EF8C          80C50004               lwz       r6,0x0004(r5)
-0F010 0EF90          80E60024               lwz       r7,0x0024(r6)
-0F014 0EF94          81070016               lwz       r8,0x0016(r7)
-0F018 0EF98          91280000               stw       r9,0x0000(r8)
-0F01C 0EF9C   X      28190000               cmplwi    r25,0x0000
-0F020 0EFA0   X      4182000C               beq       $+0x000C                  ; 0x0000EFAC
-0F024 0EFA4          80780000               lwz       r3,0x0000(r24)
+0EFFC 0EF7C   X      4082FFEC               bne       $-0x0014                  ; loop if non-NULL
+; *** KEY: Write &__target_for_exit into _IntEnv+0x16 chain ***
+; Walk: MPGM cache → MPGM hdr → info → info+0x24 (=_IntEnv, set by shared_init_helper)
+;       → _IntEnv+0x16 → write &__target_for_exit there
+0F000 0EF80          8062FFC8               lwz       r3,-0x0038(RTOC)          ; r3 = ptr to MPGM cache var (RTOC-0x38)
+0F004 0EF84          8122FFB8               lwz       r9,-0x0048(RTOC)          ; r9 = &__target_for_exit (RTOC-0x48)
+0F008 0EF88          80A30000               lwz       r5,0x0000(r3)             ; r5 = MPGM hdr ptr
+0F00C 0EF8C          80C50004               lwz       r6,0x0004(r5)             ; r6 = info block ptr
+0F010 0EF90          80E60024               lwz       r7,0x0024(r6)             ; r7 = *(info+0x24) = &_IntEnv
+                                                                                ; (written by shared_init_helper)
+0F014 0EF94          81070016               lwz       r8,0x0016(r7)             ; r8 = *(_IntEnv+0x16) = ??? ptr
+0F018 0EF98          91280000               stw       r9,0x0000(r8)             ; *(*(_IntEnv+0x16)) = &__target_for_exit
+                                                                                ; THIS IS THE EXIT CHAIN SETUP!
+                                                                                ; _IntEnv+0x16 points to a cell where
+                                                                                ; &__target_for_exit is stored.
+                                                                                ; _RTExit later reads it back.
+; --- Return optional values to caller ---
+0F01C 0EF9C   X      28190000               cmplwi    r25,0x0000                ; if arg4 != NULL...
+0F020 0EFA0   X      4182000C               beq       $+0x000C
+0F024 0EFA4          80780000               lwz       r3,0x0000(r24)            ; *arg4 = *(RTOC+0x1C0C)
 0F028 0EFA8          90790000               stw       r3,0x0000(r25)
-0F02C 0EFAC   X      281A0000               cmplwi    r26,0x0000
-0F030 0EFB0   X      4182000C               beq       $+0x000C                  ; 0x0000EFBC
-0F034 0EFB4          807D0000               lwz       r3,0x0000(r29)
+0F02C 0EFAC   X      281A0000               cmplwi    r26,0x0000                ; if arg5 != NULL...
+0F030 0EFB0   X      4182000C               beq       $+0x000C
+0F034 0EFB4          807D0000               lwz       r3,0x0000(r29)            ; *arg5 = *(r29)
 0F038 0EFB8          907A0000               stw       r3,0x0000(r26)
-0F03C 0EFBC   X      281B0000               cmplwi    r27,0x0000
-0F040 0EFC0   X      4182000C               beq       $+0x000C                  ; 0x0000EFCC
-0F044 0EFC4          807C0000               lwz       r3,0x0000(r28)
+0F03C 0EFBC   X      281B0000               cmplwi    r27,0x0000                ; if arg6 != NULL...
+0F040 0EFC0   X      4182000C               beq       $+0x000C
+0F044 0EFC4          807C0000               lwz       r3,0x0000(r28)            ; *arg6 = *(RTOC+0x1C14)
 0F048 0EFC8          907B0000               stw       r3,0x0000(r27)
-0F04C 0EFCC          811E0000               lwz       r8,0x0000(r30)
+; --- Check StandAlone and count constructor entries ---
+0F04C 0EFCC          811E0000               lwz       r8,0x0000(r30)            ; r8 = StandAlone
 0F050 0EFD0   X      2C080000               cmpwi     r8,0
-0F054 0EFD4   X      40820064               bne       $+0x0064                  ; 0x0000F038
-0F058 0EFD8          8062FFB4               lwz       r3,-0x004C(RTOC)
-0F05C 0EFDC          80A30000               lwz       r5,0x0000(r3)
+0F054 0EFD4   X      40820064               bne       $+0x0064                  ; if StandAlone != 0 → return (0xF038)
+; StandAlone == 0: check if we need to count entries in ctor list
+0F058 0EFD8          8062FFB4               lwz       r3,-0x004C(RTOC)          ; r3 = *(RTOC-0x4C)
+0F05C 0EFDC          80A30000               lwz       r5,0x0000(r3)             ; r5 = *r3
 0F060 0EFE0   X      28050000               cmplwi    r5,0x0000
-0F064 0EFE4   X      40820054               bne       $+0x0054                  ; 0x0000F038
-0F068 0EFE8          807C0000               lwz       r3,0x0000(r28)
+0F064 0EFE4   X      40820054               bne       $+0x0054                  ; if non-zero → return (0xF038)
+0F068 0EFE8          807C0000               lwz       r3,0x0000(r28)            ; r3 = *(RTOC+0x1C14) = ctor list
 0F06C 0EFEC   X      28030000               cmplwi    r3,0x0000
-0F070 0EFF0   X      41820048               beq       $+0x0048                  ; 0x0000F038
+0F070 0EFF0   X      41820048               beq       $+0x0048                  ; if NULL → return (0xF038)
+; Count entries in ctor list (r31 = count)
 0F074 0EFF4          80A30000               lwz       r5,0x0000(r3)
-0F078 0EFF8   X      3BE00000               li        r31,0
+0F078 0EFF8   X      3BE00000               li        r31,0                     ; r31 = 0 (counter)
 0F07C 0EFFC   X      28050000               cmplwi    r5,0x0000
-0F080 0F000   X      41820018               beq       $+0x0018                  ; 0x0000F018
+0F080 0F000   X      41820018               beq       $+0x0018                  ; if NULL → done counting
 0F084 0F004   X      7C691B78               mr        r9,r3
-0F088 0F008          84A90004               lwzu      r5,0x0004(r9)
-0F08C 0F00C          3BFF0001               addi      r31,r31,1
+0F088 0F008          84A90004               lwzu      r5,0x0004(r9)             ; advance, load next
+0F08C 0F00C          3BFF0001               addi      r31,r31,1                 ; count++
 0F090 0F010   X      28050000               cmplwi    r5,0x0000
-0F094 0F014   X      4082FFF4               bne       $-0x000C                  ; 0x0000F008
+0F094 0F014   X      4082FFF4               bne       $-0x000C                  ; loop
+; If count > 4, call internal function at 0xFA94 (via glue at 0x10D84)
 0F098 0F018   X      2C1F0004               cmpwi     r31,4
-0F09C 0F01C   X      40810014               ble       $+0x0014                  ; 0x0000F030
-0F0A0 0F020   X      7FE4FB78               mr        r4,r31
-0F0A4 0F024          48001D61               bl        $+0x1D60                  ; 0x00010D84
+0F09C 0F01C   X      40810014               ble       $+0x0014                  ; if count <= 4, skip
+0F0A0 0F020   X      7FE4FB78               mr        r4,r31                    ; r4 = count
+0F0A4 0F024          48001D61               bl        $+0x1D60                  ; call internal func via glue
+                                                                                ; glue at 0x10D84 → TVector RTOC+0x7C0
+                                                                                ; → code 0xFA94
 0F0A8 0F028          80410014               lwz       RTOC,0x0014(SP)
-0F0AC 0F02C          811E0000               lwz       r8,0x0000(r30)
-0F0B0 0F030          8062FFBC               lwz       r3,-0x0044(RTOC)
-0F0B4 0F034          93E30000               stw       r31,0x0000(r3)
-0F0B8 0F038   X      7D034378               mr        r3,r8
+0F0AC 0F02C          811E0000               lwz       r8,0x0000(r30)            ; r8 = StandAlone
+; Store ctor count (RTOC-0x44 → data at 0xF79B4C)
+0F0B0 0F030          8062FFBC               lwz       r3,-0x0044(RTOC)          ; r3 = *(RTOC-0x44)
+0F0B4 0F034          93E30000               stw       r31,0x0000(r3)            ; *r3 = ctor count
+; --- Return: r3 = StandAlone value ---
+0F0B8 0F038   X      7D034378               mr        r3,r8                     ; return StandAlone as result
 0F0BC 0F03C          38210060               addi      SP,SP,96
 0F0C0 0F040          80010008               lwz       r0,0x0008(SP)
-0F0C4 0F044   X      7C0803A6               mtlr      r0                        ; LR = 8
+0F0C4 0F044   X      7C0803A6               mtlr      r0
 0F0C8 0F048          BB01FFE0               lmw       r24,-0x0020(SP)
 0F0CC 0F04C   X      4E800020               blr
+; end _RTInit
 0F0D0 0F050   X      7C0802A6               mflr      r0                        ; LR = 8
 0F0D4 0F054          93E1FFFC               stw       r31,-0x0004(SP)
 0F0D8 0F058          90010008               stw       r0,0x0008(SP)
