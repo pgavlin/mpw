@@ -15201,61 +15201,82 @@ resource 'cfrg' (0) {
 0EC60 0EBE0   X      7C0803A6               mtlr      r0                        ; LR = 8
 0EC64 0EBE4          BBA1FFF4               lmw       r29,-0x000C(SP)
 0EC68 0EBE8   X      4E800020               blr
-0EC6C 0EBEC   X      7C0802A6               mflr      r0                        ; LR = 8
+; ===========================================================================
+; CFM_connection_init — reads MPGM from 0x0316, validates, sets StandAlone
+;
+; Args: r3=stack_buf, r4=&StandAlone, r5=&argc, r6=&argv, r7=&envp
+; Registers:
+;   r20 = &StandAlone flag (RTOC+0x1BD0)
+;   r27 = ptr to MPGM cache var (RTOC-0x38 → points to RTOC+0x1BCC)
+;   r25 = ptr to some struct (RTOC-0x34)
+;   r28 = &argc (caller's _IntEnv+2)
+;   r29 = &argv (caller's _IntEnv+6)
+;   r31 = &envp (caller's _IntEnv+10)
+;   r21 = &StandAlone (caller's ptr)
+; ===========================================================================
+0EC6C 0EBEC   X      7C0802A6               mflr      r0
 0EC70 0EBF0          7D800026               mfcr      r12
 0EC74 0EBF4          BE81FFD0               stmw      r20,-0x0030(SP)
 0EC78 0EBF8          90010008               stw       r0,0x0008(SP)
 0EC7C 0EBFC          91810004               stw       r12,0x0004(SP)
 0EC80 0EC00          9421FF90               stwu      SP,-0x0070(SP)
-0EC84 0EC04          3A821BD0               addi      r20,RTOC,7120
-0EC88 0EC08   X      7C7E1B78               mr        r30,r3
-0EC8C 0EC0C          8362FFC8               lwz       r27,-0x0038(RTOC)
-0EC90 0EC10   X      3860A1AD               li        r3,-24147
-0EC94 0EC14          8322FFCC               lwz       r25,-0x0034(RTOC)
-0EC98 0EC18   X      7CFF3B78               mr        r31,r7
-0EC9C 0EC1C          3AC216C0               addi      r22,RTOC,5824
-0ECA0 0EC20   X      7CDD3378               mr        r29,r6
-0ECA4 0EC24          82E2FFB0               lwz       r23,-0x0050(RTOC)
-0ECA8 0EC28   X      7CBC2B78               mr        r28,r5
-0ECAC 0EC2C          3B0216C4               addi      r24,RTOC,5828
-0ECB0 0EC30   X      7C952378               mr        r21,r4
+0EC84 0EC04          3A821BD0               addi      r20,RTOC,7120             ; r20 = &StandAlone (RTOC+0x1BD0)
+0EC88 0EC08   X      7C7E1B78               mr        r30,r3                    ; r30 = stack_buf
+0EC8C 0EC0C          8362FFC8               lwz       r27,-0x0038(RTOC)         ; r27 = *(RTOC-0x38) = ptr to MPGM cache
+0EC90 0EC10   X      3860A1AD               li        r3,-24147                 ; r3 = 0xA1AD (Gestalt trap num)
+0EC94 0EC14          8322FFCC               lwz       r25,-0x0034(RTOC)         ; r25 = *(RTOC-0x34)
+0EC98 0EC18   X      7CFF3B78               mr        r31,r7                    ; r31 = &envp
+0EC9C 0EC1C          3AC216C0               addi      r22,RTOC,5824             ; r22 = RTOC+0x16C0
+0ECA0 0EC20   X      7CDD3378               mr        r29,r6                    ; r29 = &argv
+0ECA4 0EC24          82E2FFB0               lwz       r23,-0x0050(RTOC)         ; r23 = *(RTOC-0x50)
+0ECA8 0EC28   X      7CBC2B78               mr        r28,r5                    ; r28 = &argc
+0ECAC 0EC2C          3B0216C4               addi      r24,RTOC,5828             ; r24 = RTOC+0x16C4
+0ECB0 0EC30   X      7C952378               mr        r21,r4                    ; r21 = &StandAlone (caller's)
 0ECB4 0EC34   X      3B400000               li        r26,0
-0ECB8 0EC38          48001865               bl        $+0x1864                  ; 0x0001049C
+0ECB8 0EC38          48001865               bl        $+0x1864                  ; call TrapAvailable(0xA1AD)
+                                                                                ; via glue at 0x1049C → TVector RTOC+0x760
 0ECBC 0EC3C          80410014               lwz       RTOC,0x0014(SP)
-0ECC0 0EC40          987E0000               stb       r3,0x0000(r30)
+0ECC0 0EC40          987E0000               stb       r3,0x0000(r30)            ; store TrapAvailable result
 0ECC4 0EC44   X      3BC00000               li        r30,0
-0ECC8 0EC48          81800316               lwz       r12,0x0316(0)
-0ECCC 0EC4C          91810038               stw       r12,0x0038(SP)
-0ECD0 0EC50          7D8B0034               cntlzw    r11,r12
-0ECD4 0EC54          919B0000               stw       r12,0x0000(r27)
+; *** READ MPGM FROM LOW MEMORY 0x0316 ***
+0ECC8 0EC48          81800316               lwz       r12,0x0316(0)             ; r12 = *(0x0316) = MPGM header ptr
+0ECCC 0EC4C          91810038               stw       r12,0x0038(SP)            ; save to stack
+0ECD0 0EC50          7D8B0034               cntlzw    r11,r12                   ; r11 = leading zeros (32 if null)
+0ECD4 0EC54          919B0000               stw       r12,0x0000(r27)           ; *(MPGM cache) = MPGM hdr ptr
 0ECD8 0EC58   X      280C0000               cmplwi    r12,0x0000
-0ECDC 0EC5C          81800316               lwz       r12,0x0316(0)
-0ECE0 0EC60   X      556BD97E               srwi      r11,r11,5
+0ECDC 0EC5C          81800316               lwz       r12,0x0316(0)             ; reload
+0ECE0 0EC60   X      556BD97E               srwi      r11,r11,5                 ; r11 = 1 if null, 0 if non-null
 0ECE4 0EC64          80000316               lwz       r0,0x0316(0)
-0ECE8 0EC68          91740000               stw       r11,0x0000(r20)
-0ECEC 0EC6C   X      4182005C               beq       $+0x005C                  ; 0x0000ECC8
-0ECF0 0EC70          81210038               lwz       r9,0x0038(SP)
-0ECF4 0EC74   X      552407FF               clrlwi.   r4,r9,31
-0ECF8 0EC78   X      40820040               bne       $+0x0040                  ; 0x0000ECB8
-0ECFC 0EC7C          80810038               lwz       r4,0x0038(SP)
-0ED00 0EC80   X      38C0474D               li        r6,18253
-0ED04 0EC84          80A40000               lwz       r5,0x0000(r4)
-0ED08 0EC88          3CC64D50               addis     r6,r6,19792
-0ED0C 0EC8C   X      7C053040               cmplw     r5,r6
-0ED10 0EC90   X      40820028               bne       $+0x0028                  ; 0x0000ECB8
+0ECE8 0EC68          91740000               stw       r11,0x0000(r20)           ; StandAlone = (MPGM==NULL ? 1 : 0)
+0ECEC 0EC6C   X      4182005C               beq       $+0x005C                  ; if MPGM==NULL → standalone (0xECC8)
+; --- MPGM is non-NULL: validate structure ---
+0ECF0 0EC70          81210038               lwz       r9,0x0038(SP)             ; r9 = MPGM hdr ptr
+0ECF4 0EC74   X      552407FF               clrlwi.   r4,r9,31                  ; check if ptr is odd (misaligned)
+0ECF8 0EC78   X      40820040               bne       $+0x0040                  ; if odd → standalone (0xECB8)
+; Check for 'MPGM' magic (0x4D50474D)
+0ECFC 0EC7C          80810038               lwz       r4,0x0038(SP)             ; r4 = MPGM hdr ptr
+0ED00 0EC80   X      38C0474D               li        r6,18253                  ; r6 = 0x474D ('GM')
+0ED04 0EC84          80A40000               lwz       r5,0x0000(r4)             ; r5 = *(MPGM+0) = first word
+0ED08 0EC88          3CC64D50               addis     r6,r6,19792              ; r6 = 0x4D50474D = 'MPGM'
+0ED0C 0EC8C   X      7C053040               cmplw     r5,r6                     ; compare with 'MPGM' magic
+0ED10 0EC90   X      40820028               bne       $+0x0028                  ; if no match → standalone (0xECB8)
+; Check info block pointer
 0ED14 0EC94          80810038               lwz       r4,0x0038(SP)
-0ED18 0EC98          81040004               lwz       r8,0x0004(r4)
+0ED18 0EC98          81040004               lwz       r8,0x0004(r4)             ; r8 = *(MPGM+4) = info block ptr
 0ED1C 0EC9C   X      28080000               cmplwi    r8,0x0000
-0ED20 0ECA0   X      41820018               beq       $+0x0018                  ; 0x0000ECB8
-0ED24 0ECA4          A8880000               lha       r4,0x0000(r8)
+0ED20 0ECA0   X      41820018               beq       $+0x0018                  ; if NULL → standalone (0xECB8)
+; Check 'SH' magic in info block
+0ED24 0ECA4          A8880000               lha       r4,0x0000(r8)             ; r4 = *(info+0) = 'SH' halfword
 0ED28 0ECA8   X      2C040000               cmpwi     r4,0
-0ED2C 0ECAC   X      4182000C               beq       $+0x000C                  ; 0x0000ECB8
-0ED30 0ECB0   X      39000000               li        r8,0
-0ED34 0ECB4          48000008               b         $+0x0008                  ; 0x0000ECBC
-0ED38 0ECB8   X      39000001               li        r8,1
-0ED3C 0ECBC          91140000               stw       r8,0x0000(r20)
+0ED2C 0ECAC   X      4182000C               beq       $+0x000C                  ; if 0 → standalone (0xECB8)
+; All checks passed: StandAlone = 0 (running under MPW shell)
+0ED30 0ECB0   X      39000000               li        r8,0                      ; StandAlone = 0
+0ED34 0ECB4          48000008               b         $+0x0008                  ; skip to 0xECBC
+; Validation failed: StandAlone = 1
+0ED38 0ECB8   X      39000001               li        r8,1                      ; StandAlone = 1
+0ED3C 0ECBC          91140000               stw       r8,0x0000(r20)            ; write StandAlone flag (RTOC+0x1BD0)
 0ED40 0ECC0   X      2C080000               cmpwi     r8,0
-0ED44 0ECC4   X      41820044               beq       $+0x0044                  ; 0x0000ED08
+0ED44 0ECC4   X      41820044               beq       $+0x0044                  ; if StandAlone==0 → non-standalone path (0xED08)
 0ED48 0ECC8          935B0000               stw       r26,0x0000(r27)
 0ED4C 0ECCC   X      281C0000               cmplwi    r28,0x0000
 0ED50 0ECD0   X      4182000C               beq       $+0x000C                  ; 0x0000ECDC
@@ -15272,10 +15293,12 @@ resource 'cfrg' (0) {
 0ED7C 0ECFC   X      4182016C               beq       $+0x016C                  ; 0x0000EE68
 0ED80 0ED00          935F0000               stw       r26,0x0000(r31)
 0ED84 0ED04          48000164               b         $+0x0164                  ; 0x0000EE68
-0ED88 0ED08          81090004               lwz       r8,0x0004(r9)
-0ED8C 0ED0C          A8880000               lha       r4,0x0000(r8)
-0ED90 0ED10   X      2C045348               cmpwi     r4,21320
-0ED94 0ED14   X      41820024               beq       $+0x0024                  ; 0x0000ED38
+; --- Non-standalone path: extract argc/argv/envp from MPGM info ---
+; r9 = *(RTOC+0x1BCC) = MPGM hdr ptr (from earlier cache)
+0ED88 0ED08          81090004               lwz       r8,0x0004(r9)             ; r8 = info block ptr
+0ED8C 0ED0C          A8880000               lha       r4,0x0000(r8)             ; r4 = info[0] = 'SH' magic
+0ED90 0ED10   X      2C045348               cmpwi     r4,21320                  ; 21320 = 0x5348 = 'SH'
+0ED94 0ED14   X      41820024               beq       $+0x0024                  ; if match → continue at 0xED38
 0ED98 0ED18   X      3C608000               lis       r3,-32768
 0ED9C 0ED1C          38210070               addi      SP,SP,112
 0EDA0 0ED20          80010008               lwz       r0,0x0008(SP)
@@ -15706,66 +15729,90 @@ resource 'cfrg' (0) {
 0F444 0F3C4          80010008               lwz       r0,0x0008(SP)
 0F448 0F3C8   X      7C0803A6               mtlr      r0                        ; LR = 8
 0F44C 0F3CC   X      4E800020               blr
-0F450 0F3D0   X      7C0802A6               mflr      r0                        ; LR = 8
+; ===========================================================================
+; save_emulator_state — saves zone and 68K A5 register for later restore
+;
+; Writes to a 12-byte struct at *(RTOC-0x14):
+;   +0: GetZone() result (current heap zone)
+;   +4: GetEmulatorRegister(13) result (68K A5 register)
+;   +8: 0
+; ===========================================================================
+0F450 0F3D0   X      7C0802A6               mflr      r0
 0F454 0F3D4          BFC1FFF8               stmw      r30,-0x0008(SP)
 0F458 0F3D8          90010008               stw       r0,0x0008(SP)
 0F45C 0F3DC          9421FFC0               stwu      SP,-0x0040(SP)
-0F460 0F3E0          83E2FFEC               lwz       r31,-0x0014(RTOC)
+0F460 0F3E0          83E2FFEC               lwz       r31,-0x0014(RTOC)         ; r31 = ptr to 12-byte save area (RTOC-20)
 0F464 0F3E4   X      3BC00000               li        r30,0
-0F468 0F3E8          48001A45               bl        $+0x1A44                  ; 0x00010E2C
+0F468 0F3E8          48001A45               bl        $+0x1A44                  ; call GetZone via glue
+                                                                                ; glue at 0x10E2C → import InterfaceLib::GetZone
 0F46C 0F3EC          80410014               lwz       RTOC,0x0014(SP)
-0F470 0F3F0          907F0000               stw       r3,0x0000(r31)
-0F474 0F3F4   X      3860000D               li        r3,13
-0F478 0F3F8          48001A4D               bl        $+0x1A4C                  ; 0x00010E44
+0F470 0F3F0          907F0000               stw       r3,0x0000(r31)            ; save_area[0] = GetZone()
+0F474 0F3F4   X      3860000D               li        r3,13                     ; register 13 = 68K A5
+0F478 0F3F8          48001A4D               bl        $+0x1A4C                  ; call GetEmulatorRegister via glue
+                                                                                ; glue at 0x10E44 → import GetEmulatorRegister
 0F47C 0F3FC          80410014               lwz       RTOC,0x0014(SP)
-0F480 0F400          907F0004               stw       r3,0x0004(r31)
-0F484 0F404          93DF0008               stw       r30,0x0008(r31)
+0F480 0F400          907F0004               stw       r3,0x0004(r31)            ; save_area[4] = GetEmulatorRegister(13)
+0F484 0F404          93DF0008               stw       r30,0x0008(r31)           ; save_area[8] = 0
 0F488 0F408          38210040               addi      SP,SP,64
 0F48C 0F40C          80010008               lwz       r0,0x0008(SP)
-0F490 0F410   X      7C0803A6               mtlr      r0                        ; LR = 8
+0F490 0F410   X      7C0803A6               mtlr      r0
 0F494 0F414          BBC1FFF8               lmw       r30,-0x0008(SP)
 0F498 0F418   X      4E800020               blr
+; ===========================================================================
+; __initialize — StdCLib PEF init entry point
+;
+; Sets __C_phase=1, calls shared_init_helper (0xFD40), calls _RTInit (0xEE98),
+; then save_emulator_state (0xF3D0), sets __C_phase=4, returns 0.
+; ===========================================================================
 0F49C 0F41C   X      7C0802A6               mflr      r0                        ; LR = 8
-0F4A0 0F420          BFC1FFF8               stmw      r30,-0x0008(SP)
+0F4A0 0F420          BFC1FFF8               stmw      r30,-0x0008(SP)           ; save r30-r31
 0F4A4 0F424          90010008               stw       r0,0x0008(SP)
-0F4A8 0F428          9421FFC0               stwu      SP,-0x0040(SP)
-0F4AC 0F42C          38821C08               addi      r4,RTOC,7176
+0F4A8 0F428          9421FFC0               stwu      SP,-0x0040(SP)            ; frame = 64 bytes
+0F4AC 0F42C          38821C08               addi      r4,RTOC,7176              ; r4 = &__NubAt3 (RTOC+0x1C08)
 0F4B0 0F430   X      38A00000               li        r5,0
-0F4B4 0F434          90A40000               stw       r5,0x0000(r4)
+0F4B4 0F434          90A40000               stw       r5,0x0000(r4)             ; *__NubAt3 = 0
 0F4B8 0F438   X      38C00001               li        r6,1
-0F4BC 0F43C          83E2FFE8               lwz       r31,-0x0018(RTOC)
-0F4C0 0F440          90DF0000               stw       r6,0x0000(r31)
-0F4C4 0F444          480019B9               bl        $+0x19B8                  ; 0x00010DFC
-0F4C8 0F448          80410014               lwz       RTOC,0x0014(SP)
-0F4CC 0F44C   X      2C030000               cmpwi     r3,0
-0F4D0 0F450   X      41820018               beq       $+0x0018                  ; 0x0000F468
+0F4BC 0F43C          83E2FFE8               lwz       r31,-0x0018(RTOC)         ; r31 = &__C_phase (RTOC-24)
+0F4C0 0F440          90DF0000               stw       r6,0x0000(r31)            ; *__C_phase = 1
+0F4C4 0F444          480019B9               bl        $+0x19B8                  ; call shared_init_helper via glue
+                                                                                ; glue at 0x10DFC → TVector RTOC+0x7F0
+                                                                                ; → code 0xFD40
+0F4C8 0F448          80410014               lwz       RTOC,0x0014(SP)           ; restore TOC
+0F4CC 0F44C   X      2C030000               cmpwi     r3,0                      ; check result
+0F4D0 0F450   X      41820018               beq       $+0x0018                  ; if 0, continue at 0xF468
+; --- early return on shared_init_helper failure ---
 0F4D4 0F454          38210040               addi      SP,SP,64
 0F4D8 0F458          80010008               lwz       r0,0x0008(SP)
-0F4DC 0F45C   X      7C0803A6               mtlr      r0                        ; LR = 8
+0F4DC 0F45C   X      7C0803A6               mtlr      r0
 0F4E0 0F460          BBC1FFF8               lmw       r30,-0x0008(SP)
 0F4E4 0F464   X      4E800020               blr
+; --- call _RTInit(0, 0, 0, 0, 0) ---
 0F4E8 0F468   X      38600000               li        r3,0
 0F4EC 0F46C   X      38800000               li        r4,0
 0F4F0 0F470   X      38A00000               li        r5,0
 0F4F4 0F474   X      38C00000               li        r6,0
 0F4F8 0F478   X      38E00000               li        r7,0
-0F4FC 0F47C          48001081               bl        $+0x1080                  ; 0x000104FC
+0F4FC 0F47C          48001081               bl        $+0x1080                  ; call _RTInit via glue
+                                                                                ; glue at 0x104FC → TVector RTOC+0x728
+                                                                                ; → code 0xEE98
 0F500 0F480          80410014               lwz       RTOC,0x0014(SP)
-0F504 0F484          7C630734               extsh     r3,r3
-0F508 0F488   X      2C03F4FB               cmpwi     r3,-2821
-0F50C 0F48C   X      40820018               bne       $+0x0018                  ; 0x0000F4A4
+0F504 0F484          7C630734               extsh     r3,r3                     ; sign-extend result
+0F508 0F488   X      2C03F4FB               cmpwi     r3,-2821                  ; -2821 = gestaltUndefSelectorErr
+0F50C 0F48C   X      40820018               bne       $+0x0018                  ; if != -2821, continue at 0xF4A4
+; --- early return if _RTInit returned gestaltUndefSelectorErr (OK) ---
 0F510 0F490          38210040               addi      SP,SP,64
 0F514 0F494          80010008               lwz       r0,0x0008(SP)
-0F518 0F498   X      7C0803A6               mtlr      r0                        ; LR = 8
+0F518 0F498   X      7C0803A6               mtlr      r0
 0F51C 0F49C          BBC1FFF8               lmw       r30,-0x0008(SP)
 0F520 0F4A0   X      4E800020               blr
+; --- _RTInit succeeded: set phase=4, save emulator state ---
 0F524 0F4A4   X      3BC00004               li        r30,4
-0F528 0F4A8          4BFFFF29               bl        $-0x00D8                  ; 0x0000F3D0
-0F52C 0F4AC          93DF0000               stw       r30,0x0000(r31)
-0F530 0F4B0   X      38600000               li        r3,0
+0F528 0F4A8          4BFFFF29               bl        $-0x00D8                  ; call save_emulator_state (0xF3D0)
+0F52C 0F4AC          93DF0000               stw       r30,0x0000(r31)           ; *__C_phase = 4
+0F530 0F4B0   X      38600000               li        r3,0                      ; return 0 (success)
 0F534 0F4B4          38210040               addi      SP,SP,64
 0F538 0F4B8          80010008               lwz       r0,0x0008(SP)
-0F53C 0F4BC   X      7C0803A6               mtlr      r0                        ; LR = 8
+0F53C 0F4BC   X      7C0803A6               mtlr      r0
 0F540 0F4C0          BBC1FFF8               lmw       r30,-0x0008(SP)
 0F544 0F4C4   X      4E800020               blr
 0F548 0F4C8   X      7C0802A6               mflr      r0                        ; LR = 8
@@ -16310,86 +16357,111 @@ resource 'cfrg' (0) {
 0FDB4 0FD34          9D6C0001               stbu      r11,0x0001(r12)
 0FDB8 0FD38   X      4200FFFC               bdnz      $-0x0004                  ; 0x0000FD34
 0FDBC 0FD3C   X      4E800020               blr
-0FDC0 0FD40   X      7C0802A6               mflr      r0                        ; LR = 8
+; ===========================================================================
+; shared_init_helper — reads MPGM, sets up _IntEnv, copies device/IO tables
+;
+; Called from __initialize. This is the main setup function.
+; r31 = &_IntEnv, r30 = &MPGM_cache_var (at RTOC+0x1BCC)
+; ===========================================================================
+0FDC0 0FD40   X      7C0802A6               mflr      r0
 0FDC4 0FD44          BE61FFCC               stmw      r19,-0x0034(SP)
 0FDC8 0FD48          90010008               stw       r0,0x0008(SP)
-0FDCC 0FD4C          9421FF90               stwu      SP,-0x0070(SP)
-0FDD0 0FD50          83E2FFFC               lwz       r31,-0x0004(RTOC)
-0FDD4 0FD54          38610038               addi      r3,SP,56
-0FDD8 0FD58          3882195C               addi      r4,RTOC,6492
-0FDDC 0FD5C          38BF0002               addi      r5,r31,2
-0FDE0 0FD60          3BC21BCC               addi      r30,RTOC,7116
-0FDE4 0FD64          38DF0006               addi      r6,r31,6
-0FDE8 0FD68          38FF000A               addi      r7,r31,10
-0FDEC 0FD6C          48000FB9               bl        $+0x0FB8                  ; 0x00010D24
+0FDCC 0FD4C          9421FF90               stwu      SP,-0x0070(SP)            ; frame = 112 bytes
+0FDD0 0FD50          83E2FFFC               lwz       r31,-0x0004(RTOC)         ; r31 = &_IntEnv (RTOC-4)
+0FDD4 0FD54          38610038               addi      r3,SP,56                  ; r3 = stack buffer
+0FDD8 0FD58          3882195C               addi      r4,RTOC,6492              ; r4 = &StandAlone (RTOC+0x195C)
+0FDDC 0FD5C          38BF0002               addi      r5,r31,2                  ; r5 = &_IntEnv+2 (argc dest)
+0FDE0 0FD60          3BC21BCC               addi      r30,RTOC,7116             ; r30 = &MPGM_cache (RTOC+0x1BCC)
+0FDE4 0FD64          38DF0006               addi      r6,r31,6                  ; r6 = &_IntEnv+6 (argv dest)
+0FDE8 0FD68          38FF000A               addi      r7,r31,10                 ; r7 = &_IntEnv+10 (envp dest)
+0FDEC 0FD6C          48000FB9               bl        $+0x0FB8                  ; call CFM_connection_init (0xEBEC)
+                                                                                ; via glue at 0x10D24 → TVector RTOC+0x720
 0FDF0 0FD70          80410014               lwz       RTOC,0x0014(SP)
-0FDF4 0FD74          7C600735               extsh.    r0,r3
-0FDF8 0FD78   X      4182001C               beq       $+0x001C                  ; 0x0000FD94
-0FDFC 0FD7C   X      3860F4FB               li        r3,-2821
+0FDF4 0FD74          7C600735               extsh.    r0,r3                     ; check result
+0FDF8 0FD78   X      4182001C               beq       $+0x001C                  ; if 0 (success), continue at 0xFD94
+; --- CFM_connection_init failed: return -2821 ---
+0FDFC 0FD7C   X      3860F4FB               li        r3,-2821                  ; gestaltUndefSelectorErr
 0FE00 0FD80          38210070               addi      SP,SP,112
 0FE04 0FD84          80010008               lwz       r0,0x0008(SP)
-0FE08 0FD88   X      7C0803A6               mtlr      r0                        ; LR = 8
+0FE08 0FD88   X      7C0803A6               mtlr      r0
 0FE0C 0FD8C          BA61FFCC               lmw       r19,-0x0034(SP)
 0FE10 0FD90   X      4E800020               blr
-0FE14 0FD94          813E0000               lwz       r9,0x0000(r30)
+; --- Validate MPGM structure ---
+0FE14 0FD94          813E0000               lwz       r9,0x0000(r30)            ; r9 = *(RTOC+0x1BCC) = MPGM hdr ptr
+                                                                                ; (set by CFM_connection_init)
 0FE18 0FD98   X      28090000               cmplwi    r9,0x0000
-0FE1C 0FD9C   X      41820144               beq       $+0x0144                  ; 0x0000FEE0
-0FE20 0FDA0          81290004               lwz       r9,0x0004(r9)
+0FE1C 0FD9C   X      41820144               beq       $+0x0144                  ; if NULL → standalone exit (0xFEE0)
+0FE20 0FDA0          81290004               lwz       r9,0x0004(r9)             ; r9 = *(MPGM+4) = info block ptr
 0FE24 0FDA4   X      28090000               cmplwi    r9,0x0000
-0FE28 0FDA8   X      4082001C               bne       $+0x001C                  ; 0x0000FDC4
+0FE28 0FDA8   X      4082001C               bne       $+0x001C                  ; if non-NULL, continue at 0xFDC4
+; --- info ptr is NULL: return -2821 ---
 0FE2C 0FDAC   X      3860F4FB               li        r3,-2821
 0FE30 0FDB0          38210070               addi      SP,SP,112
 0FE34 0FDB4          80010008               lwz       r0,0x0008(SP)
-0FE38 0FDB8   X      7C0803A6               mtlr      r0                        ; LR = 8
+0FE38 0FDB8   X      7C0803A6               mtlr      r0
 0FE3C 0FDBC          BA61FFCC               lmw       r19,-0x0034(SP)
 0FE40 0FDC0   X      4E800020               blr
-0FE44 0FDC4          A87F0000               lha       r3,0x0000(r31)
-0FE48 0FDC8          A8890000               lha       r4,0x0000(r9)
+; --- Compare _IntEnv magic with MPGM info magic ---
+0FE44 0FDC4          A87F0000               lha       r3,0x0000(r31)            ; r3 = _IntEnv[0] = 'SH' (0x5348)
+0FE48 0FDC8          A8890000               lha       r4,0x0000(r9)             ; r4 = info[0] = 'SH' magic
 0FE4C 0FDCC   X      7C032000               cmpw      r3,r4
-0FE50 0FDD0   X      4182001C               beq       $+0x001C                  ; 0x0000FDEC
+0FE50 0FDD0   X      4182001C               beq       $+0x001C                  ; if match, continue at 0xFDEC
+; --- Magic mismatch: return -2821 ---
 0FE54 0FDD4   X      3860F4FB               li        r3,-2821
 0FE58 0FDD8          38210070               addi      SP,SP,112
 0FE5C 0FDDC          80010008               lwz       r0,0x0008(SP)
-0FE60 0FDE0   X      7C0803A6               mtlr      r0                        ; LR = 8
+0FE60 0FDE0   X      7C0803A6               mtlr      r0
 0FE64 0FDE4          BA61FFCC               lmw       r19,-0x0034(SP)
 0FE68 0FDE8   X      4E800020               blr
-0FE6C 0FDEC          93E90024               stw       r31,0x0024(r9)
-0FE70 0FDF0          807E0000               lwz       r3,0x0000(r30)
-0FE74 0FDF4          80830004               lwz       r4,0x0004(r3)
-0FE78 0FDF8          909F0024               stw       r4,0x0024(r31)
-0FE7C 0FDFC          80A30004               lwz       r5,0x0004(r3)
-0FE80 0FE00          80C50020               lwz       r6,0x0020(r5)
+; *** KEY: Set up exit chain and cross-link _IntEnv ↔ info ***
+0FE6C 0FDEC          93E90024               stw       r31,0x0024(r9)            ; *(info+0x24) = &_IntEnv
+                                                                                ; EXIT CHAIN: StdCLib writes this!
+0FE70 0FDF0          807E0000               lwz       r3,0x0000(r30)            ; r3 = MPGM hdr ptr
+0FE74 0FDF4          80830004               lwz       r4,0x0004(r3)             ; r4 = info block ptr
+0FE78 0FDF8          909F0024               stw       r4,0x0024(r31)            ; *(_IntEnv+0x24) = info ptr
+                                                                                ; (back-pointer from _IntEnv to info)
+; --- Copy device table from MPGM to _IntEnv ---
+0FE7C 0FDFC          80A30004               lwz       r5,0x0004(r3)             ; r5 = info ptr
+0FE80 0FE00          80C50020               lwz       r6,0x0020(r5)             ; r6 = *(info+0x20) = device table ptr
 0FE84 0FE04   X      28060000               cmplwi    r6,0x0000
-0FE88 0FE08   X      418200D8               beq       $+0x00D8                  ; 0x0000FEE0
-0FE8C 0FE0C   X      38600078               li        r3,120
-0FE90 0FE10          4800122D               bl        $+0x122C                  ; 0x0001103C
+0FE88 0FE08   X      418200D8               beq       $+0x00D8                  ; if NULL → standalone exit (0xFEE0)
+; --- Allocate new device table (120 bytes = 5 entries × 24 bytes) ---
+0FE8C 0FE0C   X      38600078               li        r3,120                    ; 0x78 = 5 × 24-byte device entries
+0FE90 0FE10          4800122D               bl        $+0x122C                  ; call NewPtr(120) via glue
+                                                                                ; glue at 0x1103C → import InterfaceLib::NewPtr
 0FE94 0FE14          80410014               lwz       RTOC,0x0014(SP)
-0FE98 0FE18          907F0020               stw       r3,0x0020(r31)
+0FE98 0FE18          907F0020               stw       r3,0x0020(r31)            ; _IntEnv+0x20 = new device table ptr
 0FE9C 0FE1C   X      28030000               cmplwi    r3,0x0000
-0FEA0 0FE20   X      4082001C               bne       $+0x001C                  ; 0x0000FE3C
+0FEA0 0FE20   X      4082001C               bne       $+0x001C                  ; if non-NULL, continue at 0xFE3C
+; --- NewPtr failed ---
 0FEA4 0FE24   X      3860F4FB               li        r3,-2821
 0FEA8 0FE28          38210070               addi      SP,SP,112
 0FEAC 0FE2C          80010008               lwz       r0,0x0008(SP)
-0FEB0 0FE30   X      7C0803A6               mtlr      r0                        ; LR = 8
+0FEB0 0FE30   X      7C0803A6               mtlr      r0
 0FEB4 0FE34          BA61FFCC               lmw       r19,-0x0034(SP)
 0FEB8 0FE38   X      4E800020               blr
-0FEBC 0FE3C          807E0000               lwz       r3,0x0000(r30)
-0FEC0 0FE40   X      38E00018               li        r7,24
-0FEC4 0FE44          80830004               lwz       r4,0x0004(r3)
-0FEC8 0FE48          80DF0020               lwz       r6,0x0020(r31)
-0FECC 0FE4C          80A40020               lwz       r5,0x0020(r4)
+; --- Copy 5 device table entries (24 bytes each) from MPGM to _IntEnv ---
+; r5 = source (info+0x20 = MPGM device table), r6 = dest (_IntEnv device table)
+0FEBC 0FE3C          807E0000               lwz       r3,0x0000(r30)            ; r3 = MPGM hdr
+0FEC0 0FE40   X      38E00018               li        r7,24                     ; 24 bytes = 1 device entry
+0FEC4 0FE44          80830004               lwz       r4,0x0004(r3)             ; r4 = info ptr
+0FEC8 0FE48          80DF0020               lwz       r6,0x0020(r31)            ; r6 = _IntEnv device table (dest)
+0FECC 0FE4C          80A40020               lwz       r5,0x0020(r4)             ; r5 = MPGM device table (source)
+; copy entry 0 (FSYS): 24 bytes, r5+0..r5+20 → r6+0..r6+20
 0FED0 0FE50   X      34E7FFFC               subic.    r7,r7,4
-0FED4 0FE54          7D05382E               lwzx      r8,r5,r7
-0FED8 0FE58          7D06392E               stwx      r8,r6,r7
-0FEDC 0FE5C   X      4082FFF4               bne       $-0x000C                  ; 0x0000FE50
-0FEE0 0FE60          815F0020               lwz       r10,0x0020(r31)
-0FEE4 0FE64          39250018               addi      r9,r5,24
-0FEE8 0FE68          394A0018               addi      r10,r10,24
+0FED4 0FE54          7D05382E               lwzx      r8,r5,r7                  ; r8 = src[r7]
+0FED8 0FE58          7D06392E               stwx      r8,r6,r7                  ; dst[r7] = r8
+0FEDC 0FE5C   X      4082FFF4               bne       $-0x000C                  ; loop until r7==0
+; copy entry 1 (ECON): src+24..src+47 → dst+24..dst+47
+0FEE0 0FE60          815F0020               lwz       r10,0x0020(r31)           ; r10 = _IntEnv device table
+0FEE4 0FE64          39250018               addi      r9,r5,24                  ; r9 = src + 24
+0FEE8 0FE68          394A0018               addi      r10,r10,24               ; r10 = dst + 24
 0FEEC 0FE6C   X      39600018               li        r11,24
 0FEF0 0FE70   X      356BFFFC               subic.    r11,r11,4
 0FEF4 0FE74          7D89582E               lwzx      r12,r9,r11
 0FEF8 0FE78          7D8A592E               stwx      r12,r10,r11
-0FEFC 0FE7C   X      4082FFF4               bne       $-0x000C                  ; 0x0000FE70
+0FEFC 0FE7C   X      4082FFF4               bne       $-0x000C                  ; loop
+; copy entry 2 (SYST): src+48..src+71 → dst+48..dst+71
 0FF00 0FE80          839F0020               lwz       r28,0x0020(r31)
 0FF04 0FE84          3BA50030               addi      r29,r5,48
 0FF08 0FE88          3B9C0030               addi      r28,r28,48
@@ -16397,7 +16469,8 @@ resource 'cfrg' (0) {
 0FF10 0FE90   X      377BFFFC               subic.    r27,r27,4
 0FF14 0FE94          7F5DD82E               lwzx      r26,r29,r27
 0FF18 0FE98          7F5CD92E               stwx      r26,r28,r27
-0FF1C 0FE9C   X      4082FFF4               bne       $-0x000C                  ; 0x0000FE90
+0FF1C 0FE9C   X      4082FFF4               bne       $-0x000C                  ; loop
+; copy entry 3: src+72..src+95 → dst+72..dst+95
 0FF20 0FEA0          831F0020               lwz       r24,0x0020(r31)
 0FF24 0FEA4          3B250048               addi      r25,r5,72
 0FF28 0FEA8          3B180048               addi      r24,r24,72
@@ -16405,7 +16478,8 @@ resource 'cfrg' (0) {
 0FF30 0FEB0   X      36F7FFFC               subic.    r23,r23,4
 0FF34 0FEB4          7ED9B82E               lwzx      r22,r25,r23
 0FF38 0FEB8          7ED8B92E               stwx      r22,r24,r23
-0FF3C 0FEBC   X      4082FFF4               bne       $-0x000C                  ; 0x0000FEB0
+0FF3C 0FEBC   X      4082FFF4               bne       $-0x000C                  ; loop
+; copy entry 4: src+96..src+119 → dst+96..dst+119
 0FF40 0FEC0          82BF0020               lwz       r21,0x0020(r31)
 0FF44 0FEC4          38A50060               addi      r5,r5,96
 0FF48 0FEC8          3AB50060               addi      r21,r21,96
@@ -16413,13 +16487,17 @@ resource 'cfrg' (0) {
 0FF50 0FED0   X      3694FFFC               subic.    r20,r20,4
 0FF54 0FED4          7E65A02E               lwzx      r19,r5,r20
 0FF58 0FED8          7E75A12E               stwx      r19,r21,r20
-0FF5C 0FEDC   X      4082FFF4               bne       $-0x000C                  ; 0x0000FED0
-0FF60 0FEE0          807F0012               lwz       r3,0x0012(r31)
+0FF5C 0FEDC   X      4082FFF4               bne       $-0x000C                  ; loop
+; --- Check _IntEnv+0x12 and optionally call IO init ---
+0FF60 0FEE0          807F0012               lwz       r3,0x0012(r31)            ; r3 = *(_IntEnv+0x12)
+                                                                                ; (unknown field — possibly IO table size or flag)
 0FF64 0FEE4   X      28030000               cmplwi    r3,0x0000
-0FF68 0FEE8   X      4082000C               bne       $+0x000C                  ; 0x0000FEF4
-0FF6C 0FEEC          48000CD1               bl        $+0x0CD0                  ; 0x00010BBC
+0FF68 0FEE8   X      4082000C               bne       $+0x000C                  ; if non-zero, skip IO init (0xFEF4)
+0FF6C 0FEEC          48000CD1               bl        $+0x0CD0                  ; call IO init function (0x10BBC)
+                                                                                ; (initializes IO table, stdio, etc.)
 0FF70 0FEF0          80410014               lwz       RTOC,0x0014(SP)
-0FF74 0FEF4   X      38600000               li        r3,0
+; --- Return success ---
+0FF74 0FEF4   X      38600000               li        r3,0                      ; return 0
 0FF78 0FEF8          38210070               addi      SP,SP,112
 0FF7C 0FEFC          80010008               lwz       r0,0x0008(SP)
 0FF80 0FF00   X      7C0803A6               mtlr      r0                        ; LR = 8
