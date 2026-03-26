@@ -128,24 +128,7 @@ bool ok = PEFLoader::LoadPEFFile(command, resolver, toolResult);
 
 This naturally handles any library, not just StdCLib. If a tool imports from a library we have stubs for (InterfaceLib), those resolve immediately. If it imports from a real library (StdCLib), the PEF is loaded on demand.
 
-### Step 5: Set Up Exit Chain and Patch Device Table
-
-After loading, look up `__target_for_exit` from whichever library exports it (StdCLib):
-
-```cpp
-// Find __target_for_exit from loaded libraries
-uint32_t targetForExit = 0;
-for (auto &[name, lib] : loadedLibs) {
-    uint32_t addr = PEFLoader::FindExport(lib, "__target_for_exit");
-    if (addr) { targetForExit = addr; break; }
-}
-if (targetForExit) setupExitChain(targetForExit);  // Phase 6
-
-// Patch device table for PPC (Phase 6)
-// PPCDispatch::PatchDeviceTable(...);
-```
-
-### Step 6: Run Library Init Routines
+### Step 5: Run Library Init Routines
 
 Run `__initialize` for each loaded library that has an init entry:
 
@@ -157,7 +140,7 @@ for (auto &[name, lib] : loadedLibs) {
 }
 ```
 
-### Step 7: Run the Tool
+### Step 6: Run the Tool
 
 ```cpp
 if (toolResult.entryPoint) {
@@ -173,7 +156,7 @@ The tool's entry point is typically `__start` (in the tool's own code section). 
 5. `exit()` → `_RTExit` → `longjmp(__target_for_exit, 1)` → returns to `__start`
 6. `__start` reads `*_exit_status` and returns (`blr`)
 
-### Step 8: Capture Exit Code
+### Step 7: Capture Exit Code
 
 ```cpp
 uint32_t rv = MPW::ExitStatus();  // reads info+0x0E
