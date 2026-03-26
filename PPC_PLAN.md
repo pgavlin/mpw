@@ -202,7 +202,15 @@ Likely symbols: NewPtrClear, NewHandleClear, GetHandleSize, BlockMoveData, Resou
 
 ---
 
-## Phase 5: MPW Environment for PPC
+## Phase 5: PPC Tool Loading and Execution
+
+**Goal:** Wire everything together in `bin/loader.cpp` to load and run a PPC MPW tool. StdCLib init will crash at ECON device calls (Phase 6), but the integration harness is in place.
+
+See PPC_PHASE5.md for details.
+
+---
+
+## Phase 6: MPW Environment for PPC
 
 **Goal:** Set up the runtime data structures that StdCLib expects when running under the MPW shell.
 
@@ -288,39 +296,7 @@ StdCLib's init helper walks this for 'getv', 'setv', 'syst', 'strt' entries. Sta
 
 ---
 
-## Phase 6: PPC Tool Loading and Execution
-
-**Goal:** Wire everything together in `bin/loader.cpp` to load and run a PPC MPW tool.
-
-### Execution Flow
-1. **Detect PEF**: Check data fork for `'Joy!' 'peff'` magic. Add `--ppc` flag for explicit override.
-2. **Initialize subsystems**: MM, OS, ToolBox, MPW (same as 68K path, with PPC extensions)
-3. **Initialize PPC**: `PPC::Init(Memory, MemorySize)`
-4. **Initialize CFM stubs**: `CFMStubs::Init()`
-5. **Register InterfaceLib wrappers**: `PPCDispatch::RegisterAll()`
-6. **Load StdCLib PEF**: From `~/mpw/SharedLibraries/` (or wherever it lives). Resolve StdCLib's imports against InterfaceLib CFM stubs.
-7. **Run StdCLib `__initialize`**: Call the init entry point from PEF loader result. This sets up stdio, device handlers, etc.
-8. **Set up exit chain**: After StdCLib loads, look up `__target_for_exit` and populate info+0x24.
-9. **Load tool PEF**: Resolve imports against both StdCLib exports and CFM stubs.
-10. **Run tool entry point**: `__start` → `main` → `fprintf` → `exit` → `longjmp` back to `__start` → return
-11. **On return**: Read exit code from MPGM info+0x0E
-
-### PPC Function Call Helper
-```cpp
-void PPCCallFunction(uint32_t entryTVector) {
-    uint32_t codeAddr = memoryReadLong(entryTVector);
-    uint32_t toc = memoryReadLong(entryTVector + 4);
-    PPC::SetGPR(2, toc);  // set TOC
-    PPC::SetLR(0);        // return to address 0 = sentinel for "stop"
-    PPC::Execute(codeAddr, toc);
-}
-```
-
-When PC reaches 0 (from `blr` with LR=0), the main loop stops.
-
-### Files
-- `bin/loader.cpp` — PPC detection, loading, execution path
-- `bin/loader.h` — declarations
+See PPC_PHASE6.md for details.
 
 ### Verification
 - `mpw --ppc tools/Hello` prints "Hello, world!" to stdout, exits with status 0.

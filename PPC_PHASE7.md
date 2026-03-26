@@ -21,9 +21,9 @@ All PPC trace features reuse existing CLI flags — no new flags were added.
 | CFM stub dispatch | `--trace-toolbox` | Phase 3 | Shows every stub call with args and return values |
 | PEF loader logging | `--trace-toolbox` | Phase 2 | Shows section loading, import resolution, relocations |
 | PPC instruction trace | `--trace-cpu` | Phase 1 | Shows every PPC instruction executed (very verbose) |
-| ECON device trace | `--trace-mpw` | Phase 5 | Shows ECON read/write/ioctl calls |
-| Interactive debugger | `--debug` | Phase 6 | Breakpoints, register display, memory inspection |
-| Memory watchpoints | (programmatic) | Phase 6 | Fires on writes to specific addresses (stdout flags, exit code) |
+| ECON device trace | `--trace-mpw` | Phase 6 | Shows ECON read/write/ioctl calls |
+| Interactive debugger | `--debug` | Phase 5 | Breakpoints, register display, memory inspection |
+| Memory watchpoints | (programmatic) | Phase 5 | Fires on writes to specific addresses (stdout flags, exit code) |
 | Unresolved stub handler | (automatic) | Phase 4 | Catch-all that logs and halts on unimplemented calls |
 | `DumpPEF` | (external tool) | — | `mpw DumpPEF -do All -pi u -a -fmt on <path>` for full PEF disassembly |
 
@@ -82,7 +82,7 @@ reg("InterfaceLib", "SomeFunction", []() {
 **Symptom:** `exit(0)` crashes. `--trace-cpu` shows `_RTExit` (StdCLib offset 0xF050) reading garbage pointers.
 
 **Diagnosis:**
-1. Run with `--trace-ppc-cpu` and look for instructions around `_RTExit` (absolute address = `stdclibResult.sections[0].address + 0xF050`)
+1. Run with `--trace-cpu` and look for instructions around `_RTExit` (absolute address = `stdclibResult.sections[0].address + 0xF050`)
 2. Use memory watchpoints on `info+0x24` to see exactly when and how `_RTExit` reads the chain
 3. Trace the dereference chain:
    ```

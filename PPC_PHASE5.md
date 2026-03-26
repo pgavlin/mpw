@@ -1,424 +1,443 @@
-# Phase 5: MPW Environment for PPC
+# Phase 5: PPC Tool Loading and Execution
 
-**Goal:** Set up the runtime data structures that StdCLib expects when running under the MPW shell: ECON device table, IO cookies, and the exit/longjmp chain.
+**Goal:** Wire everything together in `bin/loader.cpp` to detect, load, and run a PPC MPW tool end-to-end.
 
-**Depends on:** Phase 3 (CFM stubs, for device handler registration), Phase 4 (InterfaceLib wrappers, for CallUniversalProc).
+**Depends on:** Phases 1-4 (PPC CPU, PEF loader, CFM stubs, InterfaceLib wrappers).
 
 ---
 
 ## Overview
 
-When StdCLib initializes, it reads the MPGM (MacProgramInfo) block at low memory 0x0316 to discover the MPW shell environment. This includes the device table (how to do I/O), the IO table (stdin/stdout/stderr), and the exit chain (how to return from exit()).
+This phase connects the PPC CPU (Phase 1), PEF loader (Phase 2), CFM stubs (Phase 3), and InterfaceLib wrappers (Phase 4) into a complete execution path. StdCLib init will crash when it reaches ECON device calls (not yet implemented) — that's expected and will be fixed in Phase 6. The loader must:
 
-The existing `MPW::Init()` already creates this structure for 68K. For PPC, we need to:
-1. Replace 68K F-trap pointers in the device table with PPC-callable TVectors
-2. Use pointer-based cookies (not bare fd numbers)
-3. Set up info+0x24 for the exit/longjmp chain
-4. Optionally set up info+0x28 for the startup entry list
-
----
-
-## ECON Device Table
-
-### Current 68K Structure
-
-The existing `MPW::Init()` creates a device table with three 24-byte entries (FSYS, ECON, SYST). The FSYS entry has function pointers to inline 68K trap code (e.g., `F001` + `RTS`). ECON and SYST are empty (name only, no handlers).
-
-### PPC Structure
-
-For PPC, all three device entries need PPC-callable function pointers. StdCLib routes console I/O through the ECON device. Each device entry is:
-
-```
-+0x00: uint32 name        ('FSYS', 'ECON', 'SYST')
-+0x04: uint32 faccess     → TVector for faccess handler
-+0x08: uint32 close       → TVector for close handler
-+0x0C: uint32 read        → TVector for read handler
-+0x10: uint32 write       → TVector for write handler
-+0x14: uint32 ioctl       → TVector for ioctl handler
-```
-
-### ECON Device Handlers
-
-Register 5 CFM stubs for the ECON device handlers. These are called through `CallUniversalProc` by StdCLib, with arguments shifted:
-
-- **read/write/close**: `CallUniversalProc(handler, 0xF1, ioEntry)` → handler receives `r3=ioEntry`
-- **ioctl**: `CallUniversalProc(handler, 0xFF1, ioEntry, cmd, arg)` → handler receives `r3=ioEntry, r4=cmd, r5=arg`
-- **faccess**: `CallUniversalProc(handler, 0xFF1, ioEntry, opcode, arg)` → handler receives `r3=ioEntry, r4=opcode, r5=arg`
-
-Each handler reads the ioEntry (20-byte record) and the cookie to determine the fd:
-
-```
-ioEntry:
-  +0x00: uint16 flags
-  +0x02: uint16 error
-  +0x04: uint32 device    → device table entry pointer
-  +0x08: uint32 cookie    → pointer to per-fd cookie struct
-  +0x0C: uint32 count
-  +0x10: uint32 buffer
-```
-
-**econ_read:**
-```cpp
-static void econ_read() {
-    uint32_t ioEntry = PPC::GetGPR(3);
-    uint32_t cookie = memoryReadLong(ioEntry + 8);
-    int hostFd = cookieToFd(cookie);
-    uint32_t count = memoryReadLong(ioEntry + 12);
-    uint32_t buffer = memoryReadLong(ioEntry + 16);
-
-    ssize_t n = ::read(hostFd, memoryPointer(buffer), count);
-    if (n < 0) {
-        memoryWriteWord(0xFFFF, ioEntry + 2);  // error
-        memoryWriteLong(0, ioEntry + 12);       // count = 0
-    } else {
-        memoryWriteWord(0, ioEntry + 2);        // no error
-        memoryWriteLong(n, ioEntry + 12);       // actual count
-    }
-    PPC::SetGPR(3, n < 0 ? -1 : 0);
-}
-```
-
-**econ_write:**
-```cpp
-static void econ_write() {
-    uint32_t ioEntry = PPC::GetGPR(3);
-    uint32_t cookie = memoryReadLong(ioEntry + 8);
-    int hostFd = cookieToFd(cookie);
-    uint32_t count = memoryReadLong(ioEntry + 12);
-    uint32_t buffer = memoryReadLong(ioEntry + 16);
-
-    // CR→LF conversion for text mode
-    uint8_t *ptr = memoryPointer(buffer);
-    std::vector<uint8_t> converted;
-    for (uint32_t i = 0; i < count; i++) {
-        uint8_t c = ptr[i];
-        converted.push_back(c == '\r' ? '\n' : c);
-    }
-
-    ssize_t n = ::write(hostFd, converted.data(), converted.size());
-    memoryWriteWord(n < 0 ? 0xFFFF : 0, ioEntry + 2);
-    memoryWriteLong(n < 0 ? 0 : (uint32_t)n, ioEntry + 12);
-    PPC::SetGPR(3, n < 0 ? -1 : 0);
-}
-```
-
-**econ_close:**
-```cpp
-static void econ_close() {
-    // No-op for console fds (don't close stdin/stdout/stderr)
-    PPC::SetGPR(3, 0);
-}
-```
-
-**econ_ioctl:**
-```cpp
-static void econ_ioctl() {
-    uint32_t ioEntry = PPC::GetGPR(3);
-    uint32_t cmd = PPC::GetGPR(4);
-    uint32_t arg = PPC::GetGPR(5);
-
-    switch (cmd) {
-    case 0x6601: // FIODUPFD
-        // Register the cookie→fd mapping
-        {
-            uint32_t cookie = memoryReadLong(ioEntry + 8);
-            // The arg is the host fd to associate
-            // Actually, FIODUPFD in MPW duplicates the file descriptor.
-            // For console, we just register the cookie→fd association.
-            registerCookieFd(cookie, hostFdFromIoEntry(ioEntry));
-        }
-        PPC::SetGPR(3, 0);
-        break;
-
-    case 0x6602: // FIOINTERACTIVE
-        // Return 0 = "this fd is interactive" (a terminal/console)
-        // This is CRITICAL: StdCLib uses this to decide whether to
-        // set the line-buffer flag on stdout's FILE structure.
-        PPC::SetGPR(3, 0);
-        break;
-
-    case 0x6603: // FIOBUFSIZE
-        // Return 0 (success), write buffer size to *arg
-        if (arg) memoryWriteLong(2048, arg);
-        PPC::SetGPR(3, 0);
-        break;
-
-    case 0x6605: // FIOREFNUM
-        // Return -1 (no Mac refNum for console)
-        PPC::SetGPR(3, (uint32_t)(int32_t)-1);
-        break;
-
-    default:
-        fprintf(stderr, "ECON ioctl: unknown cmd 0x%04X\n", cmd);
-        PPC::SetGPR(3, (uint32_t)(int32_t)-1);
-        break;
-    }
-}
-```
-
-**econ_faccess:**
-```cpp
-static void econ_faccess() {
-    // faccess(ioEntry, opcode, arg)
-    PPC::SetGPR(3, 0);  // success
-}
-```
-
-### ECON Trace Logging
-
-All ECON handlers should include trace output (gated behind the existing `--trace-mpw` flag, since ECON device I/O is the PPC equivalent of MPW F-trap I/O). ECON calls are the most important thing to trace during StdCLib init — they reveal whether stdout is being set up correctly:
-
-```cpp
-static void econ_ioctl() {
-    uint32_t ioEntry = PPC::GetGPR(3);
-    uint32_t cmd = PPC::GetGPR(4);
-    uint32_t arg = PPC::GetGPR(5);
-    uint32_t cookie = memoryReadLong(ioEntry + 8);
-    int fd = cookieToFd(cookie);
-
-    static const char *cmdNames[] = { "?", "FIODUPFD", "FIOINTERACTIVE",
-                                       "FIOBUFSIZE", "?", "FIOREFNUM" };
-    const char *cmdName = (cmd >= 0x6601 && cmd <= 0x6605)
-                          ? cmdNames[cmd - 0x6600] : "unknown";
-
-    if (Trace) {
-        fprintf(stderr, "  ECON ioctl(fd=%d, %s/0x%04X, arg=0x%08X)\n",
-                fd, cmdName, cmd, arg);
-    }
-
-    // ... dispatch by cmd ...
-
-    if (Trace) {
-        fprintf(stderr, "    -> %d", (int32_t)PPC::GetGPR(3));
-        if (cmd == 0x6603 && arg) // FIOBUFSIZE
-            fprintf(stderr, " (*arg=%d)", memoryReadLong(arg));
-        fprintf(stderr, "\n");
-    }
-}
-```
-
-The expected trace during StdCLib init:
-```
-  ECON ioctl(fd=0, FIODUPFD/0x6601, arg=0x...)    -> 0
-  ECON ioctl(fd=1, FIODUPFD/0x6601, arg=0x...)    -> 0
-  ECON ioctl(fd=2, FIODUPFD/0x6601, arg=0x...)    -> 0
-  ECON ioctl(fd=1, FIOBUFSIZE/0x6603, arg=0x...)  -> 0 (*arg=2048)
-  ECON ioctl(fd=1, FIOINTERACTIVE/0x6602, arg=0x...) -> 0
-  ECON ioctl(fd=1, FIOREFNUM/0x6605, arg=0x...)   -> -1
-```
-
-If these calls don't appear, StdCLib isn't finding or using the ECON device — check the device table patching.
-
-Similarly, `econ_write` should trace the data being written:
-```cpp
-if (Trace) {
-    fprintf(stderr, "  ECON write(fd=%d, count=%d, buf=\"%.*s\")\n",
-            fd, count, std::min(count, 40u), (char *)memoryPointer(buffer));
-}
-```
-
-### Cookie Structure
-
-Cookies are pointers to small per-fd state structures. StdCLib inspects the cookie to determine code paths. The prior work found that the cookie has at least:
-
-```
-cookie+0x00: uint8_t mode (0x01=read, 0x02=write, 0x03=read+write)
-cookie+0x01-0x0B: reserved/padding
-cookie+0x0C: uint8_t connected (1 = device is connected)
-```
-
-We allocate one cookie struct per fd (stdin, stdout, stderr) in emulated memory and maintain a host-side `std::map<uint32_t, int>` mapping cookie address → host fd number.
-
-```cpp
-// Allocate cookies
-uint32_t stdinCookie = allocateCookie(0x01, 0);   // mode=read, fd=0
-uint32_t stdoutCookie = allocateCookie(0x02, 1);   // mode=write, fd=1
-uint32_t stderrCookie = allocateCookie(0x02, 2);   // mode=write, fd=2
-```
+1. Detect whether the tool is a PEF or 68K executable
+2. Initialize the PPC subsystem
+3. Load shared libraries (StdCLib) and run their init routines
+4. Load the tool PEF and run it
+5. Capture the exit code
 
 ---
 
-## IO Table
+## Execution Flow (Detailed)
 
-Three 20-byte ioEntry records. For PPC, the cookie field points to the cookie struct (not a bare fd number), and the device field points to the ECON device table entry:
+### Step 1: Detect PEF
+
+Check the data fork of the tool for PEF magic (`'Joy!' 'peff'`). Also support `--ppc` / `--68k` flags for explicit override.
 
 ```cpp
-// stdout ioEntry
-ptr = ioBase + 20;
-memoryWriteWord(0x0002, ptr + 0);     // flags: write
-memoryWriteWord(0x0000, ptr + 2);     // error: none
-memoryWriteLong(econDevPtr, ptr + 4); // device: ECON entry
-memoryWriteLong(stdoutCookie, ptr + 8); // cookie: pointer to cookie struct
-memoryWriteLong(0, ptr + 12);          // count
-memoryWriteLong(0, ptr + 16);          // buffer
+static bool IsPEFFile(const std::string &path) {
+    // Read the first 8 bytes of the data fork
+    FILE *f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    uint8_t header[8];
+    size_t n = fread(header, 1, 8, f);
+    fclose(f);
+    return n == 8 && PEFLoader::IsPEF(header, 8);
+}
 ```
 
----
-
-## Exit Chain (info+0x24)
-
-### Background
-
-When a PPC MPW tool calls `exit(n)`:
-1. `exit()` calls `_RTExit`
-2. `_RTExit` checks the StandAlone flag (RTOC+0x1BD0)
-3. If StandAlone == 0 (under MPW shell): stores exit code, then walks a pointer chain to find a jmp_buf and calls `longjmp(jmpbuf, 1)`
-4. `longjmp` returns to the tool's `__start` function, which had called `setjmp(__target_for_exit)` at the beginning
-
-The pointer chain from the findings document:
-```
-p1 = *(info + 0x24)     // exit chain pointer
-p2 = *(p1 + 0x16)       // pointer to a pointer to jmp_buf
-jmpbuf = *p2             // the jmp_buf address
-longjmp(jmpbuf, 1)
+Add to the Flags structure in `loader.h`:
+```cpp
+bool forcePPC = false;
+bool force68K = false;
 ```
 
-### Setup
+Add `--ppc` and `--68k` to the getopt_long option table.
 
-After loading StdCLib, look up the `__target_for_exit` export. This is a data symbol in StdCLib's data section where `__start` stores its jmp_buf via `setjmp()`.
+Decision logic:
+```cpp
+bool usePPC;
+if (Flags.forcePPC) usePPC = true;
+else if (Flags.force68K) usePPC = false;
+else usePPC = IsPEFFile(command);
+```
+
+### Step 2: Initialize Subsystems
+
+Same as the 68K path:
+```cpp
+MM::Init(Memory, MemorySize, kGlobalSize, Flags.stackSize);
+OS::Init();
+ToolBox::Init();
+MPW::Init(argc, argv);  // or MPW::InitPPC(argc, argv) if separate
+```
+
+### Step 3: Initialize PPC
+
+```cpp
+PPC::Init(Memory, MemorySize);
+CFMStubs::Init();
+PPC::SetSCHandler(CFMStubs::Dispatch);
+PPCDispatch::RegisterStdCLibImports();
+```
+
+### Step 4: Load StdCLib
+
+Find the StdCLib shared library. The search path should be:
+1. `$MPW/SharedLibraries/StdCLib` (or similar)
+2. `~/mpw/SharedLibraries/StdCLib`
+3. Alongside the tool executable
+
+```cpp
+std::string stdclibPath = findSharedLibrary("StdCLib");
+PEFLoader::LoadResult stdclibResult;
+bool ok = PEFLoader::LoadPEFFile(stdclibPath, cfmResolver, stdclibResult);
+```
+
+The `cfmResolver` callback resolves StdCLib's imports against our registered stubs. InterfaceLib, MathLib, and PrivateInterfaceLib are **stub libraries** (no code, only export catalogs) — we do NOT load their PEFs. Our CFM stubs from Phase 4 ARE the implementation:
+
+```cpp
+auto cfmResolver = [](const std::string &lib, const std::string &sym, uint8_t cls) -> uint32_t {
+    uint32_t addr = CFMStubs::ResolveImport(lib, sym);
+    if (!addr) {
+        // Register catch-all for unimplemented stubs
+        addr = CFMStubs::RegisterStub(lib, sym, [lib, sym]() {
+            fprintf(stderr, "PPC FATAL: unimplemented stub %s::%s called\n",
+                    lib.c_str(), sym.c_str());
+            fprintf(stderr, "  r3=0x%08X r4=0x%08X LR=0x%08X\n",
+                    PPC::GetGPR(3), PPC::GetGPR(4), PPC::GetLR());
+            PPC::Stop();
+        });
+    }
+    return addr;
+};
+```
+
+### Step 5: Register StdCLib Exports
+
+After loading StdCLib, register all its exports as available for the tool's import resolution:
+
+```cpp
+for (const auto &exp : stdclibResult.exports) {
+    uint32_t addr = stdclibResult.sections[exp.sectionIndex].address + exp.offset;
+    CFMStubs::RegisterTVector("StdCLib", exp.name, addr);
+}
+```
+
+### Step 6: Set Up Exit Chain
+
+After loading StdCLib (so we can find `__target_for_exit`):
 
 ```cpp
 uint32_t targetForExit = PEFLoader::FindExport(stdclibResult, "__target_for_exit");
-```
-
-Then allocate the chain structures:
-
-```cpp
-// Allocate a "pointer slot" that holds the address of __target_for_exit
-uint32_t ptrSlot;
-MM::Native::NewPtr(4, true, ptrSlot);
-memoryWriteLong(targetForExit, ptrSlot);
-
-// Allocate a "chain node" (at least 0x1A bytes)
-// At offset +0x16, it holds the address of the pointer slot
-uint32_t chainNode;
-MM::Native::NewPtr(0x1A, true, chainNode);
-memoryWriteLong(ptrSlot, chainNode + 0x16);
-
-// Set info+0x24 to point to the chain node
-memoryWriteLong(chainNode, MacProgramInfo + 0x24);
-```
-
-**Important caveat**: This chain layout is based on the findings document and needs runtime verification. The actual chain walk in `_RTExit` may differ. If exit crashes, Phase 7 debugging will trace the exact dereference sequence.
-
----
-
-## Startup Entry List (info+0x28)
-
-StdCLib's init helper walks `info+0x28` looking for tagged entries:
-- `'getv'`: get environment variable callback
-- `'setv'`: set environment variable callback
-- `'syst'`: system info callback
-- `'strt'`: startup callback
-
-The entry list format is an array of `{uint32_t tag, uint32_t handler}` pairs, terminated by `{0, 0}`.
-
-**Start with NULL (info+0x28 = 0)**. StdCLib's init should proceed without these — it falls back to standalone behavior for environment variables. If testing reveals that the init fails without 'getv'/'setv', add them:
-
-```cpp
-// Only if needed:
-uint32_t startupList;
-MM::Native::NewPtr(3 * 8, true, startupList);  // 2 entries + terminator
-memoryWriteLong('getv', startupList + 0);
-memoryWriteLong(getvStubTVec, startupList + 4);
-memoryWriteLong('setv', startupList + 8);
-memoryWriteLong(setvStubTVec, startupList + 12);
-memoryWriteLong(0, startupList + 16);  // terminator
-memoryWriteLong(0, startupList + 20);
-memoryWriteLong(startupList, MacProgramInfo + 0x28);
-```
-
----
-
-## Files to Create/Modify
-
-### New: ECON handlers in `toolbox/ppc_dispatch.cpp`
-
-Add the ECON handler functions and a `PatchDeviceTable()` function that replaces the 68K device table entries with PPC TVectors:
-
-```cpp
-namespace PPCDispatch {
-    void PatchDeviceTable(uint32_t devTablePtr);
+if (targetForExit) {
+    setupExitChain(targetForExit);  // as described in Phase 6
 }
 ```
 
-This is called from the PPC loading path in `loader.cpp` after `MPW::Init()` has created the base device table.
+### Step 7: Patch Device Table
 
-### Modify: `mpw/mpw.cpp`
+Replace 68K F-trap device handlers with PPC TVectors:
 
-Extend `MPW::Init()` to:
-1. Allocate pointer-based cookies instead of bare fd numbers in the IO table
-2. Point IO entries to the ECON device instead of FSYS
-3. Export `MacProgramInfo` address so the loader can set info+0x24/info+0x28
-
-Or create a new `MPW::InitPPC()` that builds the entire MPGM block with PPC-specific settings from scratch.
-
-### Modify: `mpw/mpw.h`
-
-Add:
 ```cpp
-namespace MPW {
-    uint32_t GetMacProgramInfo();  // returns info block address
-    // Or expose MacProgramInfo directly
+uint32_t devTablePtr = memoryReadLong(MPW::GetMacProgramInfo() + 0x20);
+PPCDispatch::PatchDeviceTable(devTablePtr);
+```
+
+### Step 8: Run StdCLib `__initialize`
+
+```cpp
+if (stdclibResult.initPoint) {
+    PPCCallFunction(stdclibResult.initPoint);
 }
 ```
+
+This runs StdCLib's initialization: sets up the FILE structures, ECON device handlers, parses MPGM, etc.
+
+### Step 9: Load the Tool PEF
+
+```cpp
+PEFLoader::LoadResult toolResult;
+// The tool resolver checks StdCLib exports first, then CFM stubs
+auto toolResolver = [&](const std::string &lib, const std::string &sym, uint8_t cls) -> uint32_t {
+    // First try registered TVectors (StdCLib exports)
+    uint32_t addr = CFMStubs::ResolveImport(lib, sym);
+    if (addr) return addr;
+
+    // Try by specific library
+    if (lib == "StdCLib") {
+        uint32_t exp = PEFLoader::FindExport(stdclibResult, sym);
+        if (exp) {
+            CFMStubs::RegisterTVector(lib, sym, exp);
+            return exp;
+        }
+    }
+
+    fprintf(stderr, "PPC: unresolved tool import %s::%s\n", lib.c_str(), sym.c_str());
+    return 0;
+};
+
+ok = PEFLoader::LoadPEFFile(command, toolResolver, toolResult);
+```
+
+### Step 10: Run the Tool
+
+```cpp
+if (toolResult.entryPoint) {
+    PPCCallFunction(toolResult.entryPoint);
+}
+```
+
+The tool's entry point is typically `__start` (either its own or imported from StdCLib). `__start`:
+1. Calls `setjmp(__target_for_exit)`
+2. Loads argc/argv from MPGM
+3. Calls `main(argc, argv)`
+4. Calls `exit(return_value)`
+5. `exit()` → `_RTExit` → `longjmp(__target_for_exit, 1)` → returns to `__start`
+6. `__start` reads `*_exit_status` and returns (`blr`)
+
+### Step 11: Capture Exit Code
+
+```cpp
+uint32_t rv = MPW::ExitStatus();  // reads info+0x0E
+if (rv > 0xff) rv = 0xff;
+exit(rv);
+```
+
+---
+
+## PPCCallFunction Helper
+
+This helper calls a PPC function by its TVector address:
+
+```cpp
+static void PPCCallFunction(uint32_t tvecAddr) {
+    uint32_t codeAddr = memoryReadLong(tvecAddr);
+    uint32_t toc = memoryReadLong(tvecAddr + 4);
+
+    // Set up PPC stack pointer (r1) at top of memory, below 68K stack
+    uint32_t ppcStackTop = Flags.memorySize - Flags.stackSize - 64;
+    ppcStackTop &= ~0xF;  // 16-byte aligned
+    PPC::SetGPR(1, ppcStackTop);
+
+    // Set TOC
+    PPC::SetGPR(2, toc);
+
+    // Set LR = 0 as "return to top" sentinel
+    PPC::SetLR(0);
+
+    // Execute
+    PPC::Execute(codeAddr, toc);
+}
+```
+
+When the function returns (`blr` with LR=0), PC becomes 0 and execution stops (Unicorn raises unmapped fetch error).
+
+---
+
+## Finding Shared Libraries
+
+StdCLib and other shared libraries are stored in the MPW environment. We need a search function:
+
+```cpp
+static std::string findSharedLibrary(const std::string &name) {
+    // Check MPW SharedLibraries directory
+    std::string mpwRoot = MPW::RootDir();
+
+    // Try common paths
+    std::vector<std::string> searchPaths = {
+        mpwRoot + "/SharedLibraries/" + name,
+        mpwRoot + "/Libraries/" + name,
+    };
+
+    for (const auto &path : searchPaths) {
+        // Check data fork existence
+        struct stat st;
+        if (stat(path.c_str(), &st) == 0) return path;
+
+        // Check with common suffixes
+        // PEF shared libraries may not have an extension
+    }
+
+    return "";
+}
+```
+
+The exact path depends on how the user's `~/mpw` is organized. May need `--shared-lib-path` flag or `$SharedLibraries` environment variable.
+
+---
+
+## Debugging and Trace Integration
+
+### Trace Flag Wiring
+
+The existing trace flags are reused for PPC — no new flags needed. When the PPC execution path is active, the existing flags are wired to the PPC trace infrastructure:
+
+| Existing flag | PPC behavior |
+|------|---------------|
+| `--trace-cpu` | Every PPC instruction (address + hex + register snapshot). Very verbose. |
+| `--trace-toolbox` | CFM stub dispatch (function name + args + return) AND PEF loader logging. One line per OS/Toolbox call. |
+| `--trace-mpw` | ECON device handler calls (read/write/ioctl with fd, cmd, data). |
+| `--debug` | Interactive debugger with PPC register display. |
+
+`--trace-toolbox` is the one you'll use most often — it shows the entire API call sequence StdCLib makes during initialization and execution.
+
+### Debugger Support
+
+The existing interactive debugger (`bin/debugger.cpp`) supports breakpoints, memory inspection, register display, and single-stepping for 68K. For PPC, add basic debugger integration:
+
+**Phase 5 scope (minimal):**
+- `--debug` flag should work with PPC tools: drop into debugger before first PPC instruction
+- Register display: show r0-r31, f0-f13, PC, LR, CTR, CR, XER, r2 (TOC)
+- Memory inspection: already works (shared memory)
+- `PPC::SetBreakpoint(addr)` — use `UC_HOOK_CODE` with a specific address range to break
+
+**Deferred (not needed for Hello World):**
+- PPC single-stepping (can be done with `uc_emu_start(... count=1)`)
+- PPC disassembly in debugger (would need a PPC disassembler, or use `DumpPEF`)
+- Breakpoints within StdCLib code
+
+### Memory Watchpoints
+
+For debugging the exit chain and stdout buffering, add memory write watchpoints:
+
+```cpp
+// Watch writes to the stdout FILE flags field:
+PPC::SetWatchpoint(stdoutFileAddr + 0x12, 2, [](uint32_t addr, uint32_t val) {
+    fprintf(stderr, "  WATCH: stdout flags written: 0x%04X\n", val);
+});
+
+// Watch writes to info+0x0E (exit code):
+PPC::SetWatchpoint(MacProgramInfo + 0x0E, 4, [](uint32_t addr, uint32_t val) {
+    fprintf(stderr, "  WATCH: exit code written: %d\n", (int32_t)val);
+});
+```
+
+Implement via `UC_HOOK_MEM_WRITE` with address range filtering.
+
+---
+
+## Files to Modify
+
+### `bin/loader.h`
+
+Add to the `Settings` struct:
+```cpp
+bool forcePPC = false;
+bool force68K = false;
+```
+
+The existing `traceCPU`, `traceToolBox`, `traceMPW`, and `debugger` flags are reused as-is.
+
+### `bin/loader.cpp`
+
+Major changes:
+
+1. **Add command-line options**: `--ppc`, `--68k`
+2. **Add PEF detection**: `IsPEFFile()` function
+3. **Add PPC execution path**: After the existing 68K loading path, add an `if (usePPC)` branch with:
+   - PPC::Init
+   - Wire trace flags: `PPC::SetTraceCode(Flags.traceCPU)`, `CFMStubs::SetTrace(Flags.traceToolBox)`, `PEFLoader::SetTrace(Flags.traceToolBox)`
+   - CFMStubs::Init
+   - PPC::SetSCHandler
+   - PPCDispatch::RegisterStdCLibImports
+   - Load StdCLib
+   - Register exports
+   - Set up exit chain
+   - Patch device table
+   - Run StdCLib init
+   - Load tool
+   - Run tool
+   - Capture exit code
+4. **Add PPCCallFunction helper**
+5. **Add shared library search**
+6. **Add includes**: ppc.h, pef_loader.h, cfm_stubs.h, ppc_dispatch.h
+
+### `bin/CMakeLists.txt`
+
+Add `PPC_LIB` to the mpw target link libraries (if not already done in Phase 1).
 
 ---
 
 ## Implementation Steps
 
-1. Add ECON handler functions to `toolbox/ppc_dispatch.cpp`:
-   a. `econ_read()`, `econ_write()`, `econ_close()`, `econ_ioctl()`, `econ_faccess()`
-   b. Cookie allocation helper
-   c. Cookie→fd mapping (host-side `std::map`)
-   d. `PatchDeviceTable()` — register ECON stubs, write TVectors into device table
-2. Modify `mpw/mpw.cpp`:
-   a. Add cookie allocation to IO table setup (or create `InitPPC()`)
-   b. Point IO entries at ECON device
-   c. Expose MacProgramInfo address
-3. Add exit chain setup (in loader.cpp or a helper):
-   a. Look up `__target_for_exit` from StdCLib exports
-   b. Allocate chain node and pointer slot
-   c. Write info+0x24
+1. Add `--ppc` / `--68k` flags to getopt option table in loader.cpp
+2. Add `IsPEFFile()` function
+3. Add `findSharedLibrary()` function
+4. Add `PPCCallFunction()` helper
+5. Add the PPC execution path in `main()`:
+   a. Detect PEF
+   b. Initialize PPC subsystem
+   c. Load StdCLib
+   d. Register StdCLib exports
+   e. Set up exit chain
+   f. Patch device table
+   g. Run StdCLib __initialize
+   h. Load tool PEF
+   i. Run tool entry point
+   j. Capture exit code
+6. Add new includes and link flags
 
 ---
 
 ## Validation
 
-### ECON ioctl test
+### End-to-end test: Hello World
 
-After StdCLib init, verify via tracing that the following ioctl calls were made:
-- 3x FIODUPFD (0x6601) — for stdin, stdout, stderr
-- 1x FIOBUFSIZE (0x6603) — for stdout
-- 1x FIOINTERACTIVE (0x6602) — for stdout
-- 1x FIOREFNUM (0x6605) — for stdout
+```bash
+cd build && cmake .. && make
+./bin/mpw --ppc ~/path/to/Hello
+```
 
-All should return 0 (success) except FIOREFNUM which returns -1.
+**Expected output:**
+```
+Hello, world!
+```
 
-### stdout line-buffering test
+**Expected exit code:** 0 (`echo $?`)
 
-After StdCLib init completes, inspect stdout's FILE structure in emulated memory. The FILE structure (24 bytes) at the address StdCLib uses for stdout should have the line-buffer flag set in the flags field at offset +0x12. The exact bit for line-buffering needs to be verified (suspected 0x0040 or 0x0010).
+### Trace test
 
-If the flag is NOT set despite FIOINTERACTIVE returning 0, the cookie structure may need adjustment — StdCLib may inspect cookie bytes to determine the code path.
+Run with tracing to see the full execution flow:
 
-### Exit chain test
+```bash
+./bin/mpw --ppc --trace-toolbox ~/path/to/Hello
+```
 
-After setting up info+0x24 and calling StdCLib's `__initialize`:
-1. Call a trivial PPC function that calls `exit(0)`
-2. Verify that `_RTExit` successfully calls `longjmp` and control returns to the tool's `__start`
-3. Verify the exit code is written to info+0x0E
+Should show:
+1. StdCLib imports being resolved
+2. StdCLib __initialize stub calls (Gestalt, NewPtr, NewRoutineDescriptor, ECON ioctls)
+3. Tool imports being resolved
+4. Tool execution: fprintf → StdCLib internal calls → ECON write
+5. Exit path: exit → _RTExit → longjmp → __start returns
 
-If exit crashes, Phase 7 debugging will trace the exact chain walk.
+### Failure mode: Missing stubs
 
-### ECON write test
+If StdCLib imports a function we haven't implemented:
+```
+PPC: unresolved import InterfaceLib::SomeFunction
+```
 
-Write test: manually invoke `econ_write` with a buffer containing "test\r" and verify "test\n" appears on the host stdout.
+Add the missing stub and retry.
+
+### Failure mode: StdCLib init crashes
+
+If `__initialize` crashes:
+1. Enable `CFMStubs::SetTrace(true)` to see the last stub call before the crash
+2. Check PPC register state (PC, LR, r1) at crash point
+3. Common causes: missing stub, wrong argument passing, bad memory access
+
+### Failure mode: No output
+
+If the tool runs but produces no output:
+1. stdout may not be line-buffered → `\r` doesn't trigger flush
+2. Exit may crash before flushing → data is lost in FILE buffer
+3. Check Phase 6's ECON ioctl validation
+4. Try HelloFlush (with explicit `fflush`) as a simpler test
+
+### Failure mode: Exit crashes
+
+If `exit(0)` crashes:
+1. The exit chain (info+0x24) may be wrong → Phase 7 debugging
+2. `longjmp` target may be corrupted
+3. Enable instruction tracing around `_RTExit` code offset 0xF050
 
 ---
 
 ## Risk Notes
 
-- **Cookie structure layout**: The exact byte layout StdCLib expects in cookies is partially reverse-engineered. If StdCLib inspects cookie bytes we don't set correctly, the code path to FIOINTERACTIVE may be skipped, and stdout won't be line-buffered. Debugging this requires tracing StdCLib's init code.
-- **Exit chain layout**: The findings document's chain description (`info+0x24 → +0x16 → *ptr = jmpbuf`) may be incomplete or incorrect. Runtime tracing of `_RTExit` is the definitive way to determine the layout.
-- **ECON vs FSYS**: StdCLib routes console I/O through ECON, not FSYS. The IO table entries must point to the ECON device, not FSYS. Getting this wrong means writes go through the wrong handler.
-- **CR→LF conversion**: Mac uses CR (0x0D) as line ending; Unix uses LF (0x0A). The ECON write handler must convert. But only for text mode — binary mode should pass through unchanged.
+- **Shared library path**: The exact location of StdCLib in `~/mpw` may vary. Add helpful error messages if not found.
+- **Multiple shared libraries**: The tool may import from InterfaceLib directly (not just via StdCLib). These are handled by CFM stubs, not by loading InterfaceLib as a PEF.
+- **PPC stack setup**: The PPC stack must not overlap with the 68K stack or any allocated memory. Place it carefully.
+- **Re-entrance**: `PPCCallFunction` is called twice (StdCLib init, then tool). The PPC engine state (registers) must be properly reset between calls.
+- **Fat binaries**: Some tools have both 68K (CODE resources) and PPC (PEF data fork) code. The `--ppc` flag forces PPC; auto-detection should prefer PPC if PEF is present (or 68K if CODE resources exist — this is a policy choice).
