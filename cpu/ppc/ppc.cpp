@@ -7,11 +7,16 @@
 
 #include "ppc.h"
 
+#include <cpu/m68k/defs.h>
+#include <cpu/m68k/fmem.h>
+
 #include <unicorn/unicorn.h>
 #include <unicorn/ppc.h>
+#include <capstone.h>
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace {
 
@@ -21,6 +26,7 @@ namespace {
 	bool traceCode = false;
 	uc_hook intrHook = 0;
 	uc_hook codeHook = 0;
+	csh capstone = 0;
 
 	void checkErr(uc_err err, const char *context) {
 		if (err != UC_ERR_OK) {
@@ -115,6 +121,11 @@ namespace PPC {
 		                  (void *)interruptHook, nullptr, 1, 0);
 		checkErr(err, "uc_hook_add(INTR)");
 
+		// Initialize Capstone for PPC disassembly
+		if (!capstone) {
+			cs_open(CS_ARCH_PPC, CS_MODE_BIG_ENDIAN, &capstone);
+		}
+
 		stopped = false;
 	}
 
@@ -122,6 +133,10 @@ namespace PPC {
 		if (uc) {
 			uc_close(uc);
 			uc = nullptr;
+		}
+		if (capstone) {
+			cs_close(&capstone);
+			capstone = 0;
 		}
 		intrHook = 0;
 		codeHook = 0;
@@ -247,6 +262,47 @@ namespace PPC {
 			                         nullptr, 1, 0);
 			checkErr(err, "uc_hook_add(CODE trace)");
 		}
+	}
+
+	bool Step() {
+		if (!uc) return false;
+
+		stopped = false;
+		uint32_t pc = GetPC();
+
+		// Execute exactly one instruction
+		uc_err err = uc_emu_start(uc, pc, 0, 0, 1);
+
+		if (stopped) return false;
+		if (err != UC_ERR_OK && err != UC_ERR_FETCH_UNMAPPED) return false;
+		if (GetPC() == 0) return false;
+
+		return true;
+	}
+
+	uint32_t Disassemble(uint32_t addr, char *buf, size_t bufSize) {
+		if (!capstone || !buf || bufSize == 0) {
+			if (buf && bufSize > 0) buf[0] = '\0';
+			return addr + 4;
+		}
+
+		uint8_t code[4];
+		code[0] = memoryReadByte(addr);
+		code[1] = memoryReadByte(addr + 1);
+		code[2] = memoryReadByte(addr + 2);
+		code[3] = memoryReadByte(addr + 3);
+
+		cs_insn *insn;
+		size_t count = cs_disasm(capstone, code, 4, addr, 1, &insn);
+		if (count > 0) {
+			snprintf(buf, bufSize, "%-8s %s", insn[0].mnemonic, insn[0].op_str);
+			cs_free(insn, count);
+		} else {
+			snprintf(buf, bufSize, ".long    0x%02X%02X%02X%02X",
+			         code[0], code[1], code[2], code[3]);
+		}
+
+		return addr + 4;
 	}
 
 } // namespace PPC

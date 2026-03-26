@@ -59,6 +59,15 @@ namespace PPC {
 	// Set the handler for sc instructions.
 	void SetSCHandler(SCHandler handler);
 
+	// Execute exactly one instruction at the current PC.
+	// Returns true if execution can continue, false if stopped.
+	bool Step();
+
+	// Disassemble one instruction at addr.
+	// Writes "mnemonic operands" into buf.
+	// Returns address of the next instruction.
+	uint32_t Disassemble(uint32_t addr, char *buf, size_t bufSize);
+
 	// Enable per-instruction trace output to stderr.
 	// Activated by the existing --trace-cpu flag when running a PPC tool.
 	void SetTraceCode(bool enable);

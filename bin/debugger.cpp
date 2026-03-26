@@ -54,6 +54,7 @@
 
 #include <cpu/m68k/defs.h>
 #include <cpu/m68k/CpuModule.h>
+#include <cpu/ppc/ppc.h>
 
 #include <macos/traps.h>
 #include <macos/sysequ.h>
@@ -73,6 +74,7 @@ namespace {
 
 	bool sigInt = false;
 	bool memBreak = false;
+	bool ppcMode = false;
 	void sigIntHandler(int)
 	{
 		sigInt = true;
@@ -167,6 +169,15 @@ namespace {
 		{
 			if (op) *op = 0;
 			return pc;
+		}
+
+		if (ppcMode) {
+			char buf[128];
+			uint32_t raw = Debug::ReadLong(pc);
+			uint32_t nextpc = PPC::Disassemble(pc, buf, sizeof(buf));
+			if (op) *op = (uint16_t)(raw >> 16);
+			printf("$%08X   %08X   %s\n", pc, raw, buf);
+			return nextpc;
 		}
 
 		uint16_t opcode = Debug::ReadWord(pc);
@@ -264,8 +275,36 @@ namespace {
 		uint16_t op;
 		memBreak = false;
 
+		if (ppcMode) {
+			bool ok = PPC::Step();
+			uint32_t pc = PPC::GetPC();
 
+			if (trace) disasm(pc, &op);
+			else op = 0;
 
+			if (!ok || pc == 0) {
+				if (!trace) disasm(pc);
+				printf("CPU stopped\n");
+				return false;
+			}
+
+			if (sigInt) {
+				if (!trace) disasm(pc);
+				printf("^C break\n");
+				sigInt = false;
+				return false;
+			}
+
+			if (brkMap.lookup(pc & 0x00ffffff)) {
+				if (!trace) disasm(pc);
+				printf("Break $%08X\n", pc);
+				return false;
+			}
+
+			return true;
+		}
+
+		// --- 68K path (unchanged) ---
 
 		//uint32_t prevPC = cpuGetPC();
 
@@ -279,10 +318,6 @@ namespace {
 		//BackTrace.back().pc = prevPC;
 
 		cpuExecuteInstruction();
-
-
-
-
 
 		uint32_t pc = cpuGetPC();
 
@@ -708,6 +743,28 @@ void PrintRegisters(const BackTraceInfo &i)
 
 void PrintRegisters()
 {
+	if (ppcMode) {
+		printf("     0        1        2        3        4        5        6        7\n");
+		printf("R:  %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			PPC::GetGPR(0), PPC::GetGPR(1), PPC::GetGPR(2), PPC::GetGPR(3),
+			PPC::GetGPR(4), PPC::GetGPR(5), PPC::GetGPR(6), PPC::GetGPR(7));
+		printf("     8        9       10       11       12       13       14       15\n");
+		printf("R:  %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			PPC::GetGPR(8), PPC::GetGPR(9), PPC::GetGPR(10), PPC::GetGPR(11),
+			PPC::GetGPR(12), PPC::GetGPR(13), PPC::GetGPR(14), PPC::GetGPR(15));
+		printf("    16       17       18       19       20       21       22       23\n");
+		printf("R:  %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			PPC::GetGPR(16), PPC::GetGPR(17), PPC::GetGPR(18), PPC::GetGPR(19),
+			PPC::GetGPR(20), PPC::GetGPR(21), PPC::GetGPR(22), PPC::GetGPR(23));
+		printf("    24       25       26       27       28       29       30       31\n");
+		printf("R:  %08x %08x %08x %08x %08x %08x %08x %08x\n",
+			PPC::GetGPR(24), PPC::GetGPR(25), PPC::GetGPR(26), PPC::GetGPR(27),
+			PPC::GetGPR(28), PPC::GetGPR(29), PPC::GetGPR(30), PPC::GetGPR(31));
+		printf("PC: %08X  LR: %08X  CTR: %08X  CR: %08X  XER: %08X\n",
+			PPC::GetPC(), PPC::GetLR(), PPC::GetCTR(), PPC::GetCR(), PPC::GetXER());
+		return;
+	}
+
 	uint16_t sr = cpuGetSR();
 	const char *srbits = srBits(sr);
 
@@ -1019,6 +1076,58 @@ void SetXRegister(unsigned reg, uint32_t value)
 
 }
 
+void SetGPRegister(unsigned reg, uint32_t value)
+{
+	if (reg > 31) return;
+	PPC::SetGPR(reg, value);
+}
+
+uint32_t ReadDRegister(unsigned reg)
+{
+	if (ppcMode) return 0;
+	return cpuGetDReg(reg);
+}
+
+uint32_t ReadARegister(unsigned reg)
+{
+	if (ppcMode) {
+		// sp → r1 in PPC mode
+		if (reg == 7) return PPC::GetGPR(1);
+		return 0;
+	}
+	return cpuGetAReg(reg);
+}
+
+uint32_t ReadGPRegister(unsigned reg)
+{
+	if (reg > 31) return 0;
+	return PPC::GetGPR(reg);
+}
+
+uint32_t ReadXRegister(unsigned reg)
+{
+	if (ppcMode) {
+		switch (reg) {
+		case 0: return PPC::GetPC();
+		case 1: return 0; // no SR in PPC
+		case 2: return PPC::GetLR();
+		case 3: return PPC::GetCTR();
+		case 4: return PPC::GetCR();
+		case 5: return PPC::GetXER();
+		default: return 0;
+		}
+	}
+	switch (reg) {
+	case 0: return cpuGetPC();
+	case 1: return cpuGetSR();
+	default: return 0;
+	}
+}
+
+void SetPPCMode(bool ppc)
+{
+	ppcMode = ppc;
+}
 
 // todo -- return a range
 uint32_t VariableGet(const std::string &s)
@@ -1259,8 +1368,11 @@ void Shell()
 
 
 	// start it up
-	printf("MPW Debugger shell\n\n");
-	disasm(cpuGetPC());
+	if (ppcMode)
+		printf("MPW Debugger shell (PPC mode)\n\n");
+	else
+		printf("MPW Debugger shell\n\n");
+	disasm(ppcMode ? PPC::GetPC() : cpuGetPC());
 
 	signal(SIGINT, sigIntHandler);
 	memorySetLoggingFunc(MemoryLogger);

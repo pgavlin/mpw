@@ -664,7 +664,23 @@ static void RunPPC(int argc, char **argv, const std::string &command) {
 	if (toolResult.entryPoint) {
 		if (Flags.traceToolBox)
 			fprintf(stderr, "PPC: running tool entry point\n");
-		PPCCallFunction(toolResult.entryPoint);
+
+		if (Flags.debugger) {
+			// Set up PPC state but don't execute — let the debugger control it
+			uint32_t codeAddr = memoryReadLong(toolResult.entryPoint);
+			uint32_t toc = memoryReadLong(toolResult.entryPoint + 4);
+			uint32_t ppcStackTop = Flags.memorySize - Flags.stackSize - 64;
+			ppcStackTop &= ~0xF;
+			PPC::SetGPR(1, ppcStackTop);
+			PPC::SetGPR(2, toc);
+			PPC::SetLR(0);
+			PPC::SetPC(codeAddr);
+
+			Debug::SetPPCMode(true);
+			Debug::Shell();
+		} else {
+			PPCCallFunction(toolResult.entryPoint);
+		}
 	} else {
 		fprintf(stderr, "PPC: no entry point in %s\n", command.c_str());
 		exit(EX_SOFTWARE);

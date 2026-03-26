@@ -127,6 +127,14 @@ void List(uint32_t pc, uint32_t endpc);
 void SetARegister(unsigned reg, uint32_t value);
 void SetDRegister(unsigned reg, uint32_t value);
 void SetXRegister(unsigned reg, uint32_t value);
+void SetGPRegister(unsigned reg, uint32_t value);
+
+uint32_t ReadARegister(unsigned reg);
+uint32_t ReadDRegister(unsigned reg);
+uint32_t ReadXRegister(unsigned reg);
+uint32_t ReadGPRegister(unsigned reg);
+
+void SetPPCMode(bool ppc);
 
 void ToolBreak(int32_t tool);
 void ToolBreak();

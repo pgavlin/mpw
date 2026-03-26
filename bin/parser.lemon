@@ -244,6 +244,11 @@ stmt ::= XREGISTER(a) EQ expr(b) EOL.
 	Debug::SetXRegister(a.intValue, b.intValue);
 }
 
+stmt ::= GPREGISTER(a) EQ expr(b) EOL.
+{
+	Debug::SetGPRegister(a.intValue, b.intValue);
+}
+
 stmt ::= HELP EOL.
 {
 	Debug::Help();
@@ -312,19 +317,7 @@ term(rhs) ::= IDENTIFIER(a).
 }
 
 
-register(rhs) ::= DREGISTER(a). { rhs = Token::Make(cpuGetDReg(a)); }
-register(rhs) ::= AREGISTER(a). { rhs = Token::Make(cpuGetAReg(a)); }
-register(rhs) ::= XREGISTER(a).
-{
-	switch(a)
-	{
-	case 0: 
-		rhs = Token::Make(cpuGetPC());
-		break;
-	case 1:
-		rhs = Token::Make(cpuGetSR());
-		break;
-	default:
-		rhs = Token::Make(0);
-	}
-}
+register(rhs) ::= DREGISTER(a). { rhs = Token::Make(Debug::ReadDRegister(a)); }
+register(rhs) ::= AREGISTER(a). { rhs = Token::Make(Debug::ReadARegister(a)); }
+register(rhs) ::= GPREGISTER(a). { rhs = Token::Make(Debug::ReadGPRegister(a)); }
+register(rhs) ::= XREGISTER(a). { rhs = Token::Make(Debug::ReadXRegister(a)); }

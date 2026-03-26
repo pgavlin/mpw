@@ -257,6 +257,35 @@ namespace {
 			Parse(parser, tkAREGISTER, 6, command);
 		};
 
+		# PPC general purpose registers r0-r31
+		'r'i ([0-9] | [12][0-9] | '3' [01]) {
+			uint32_t data = 0;
+			for (const char *p = ts + 1; p < te; p++)
+				data = data * 10 + (*p - '0');
+			Parse(parser, tkGPREGISTER, data, command);
+		};
+
+		'lr'i {
+			Parse(parser, tkXREGISTER, 2, command);
+		};
+
+		'ctr'i {
+			Parse(parser, tkXREGISTER, 3, command);
+		};
+
+		'cr'i {
+			Parse(parser, tkXREGISTER, 4, command);
+		};
+
+		'xer'i {
+			Parse(parser, tkXREGISTER, 5, command);
+		};
+
+		'rtoc'i {
+			// alias for r2 (PPC TOC register)
+			Parse(parser, tkGPREGISTER, 2, command);
+		};
+
 		# commands...
 
 		'bt'i | 'backtrace'i {
