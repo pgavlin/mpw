@@ -6,6 +6,7 @@
  */
 
 #include <toolbox/cfm_stubs.h>
+#include <toolbox/ppc_dispatch.h>
 #include <toolbox/pef_loader.h>
 #include <toolbox/mm.h>
 #include <cpu/ppc/ppc.h>
@@ -194,10 +195,8 @@ static void testAllocateCode() {
 static void testPEFIntegration(const char *stdclibPath) {
 	printf("Test: PEF loader integration with CFM resolver...\n");
 
-	// Register a handful of InterfaceLib stubs (just enough to not crash on resolve)
-	// Register all 60 InterfaceLib + 4 MathLib + 2 PrivateInterfaceLib symbols
-	// that StdCLib imports. Use a catch-all: any unresolved import becomes a
-	// stub that logs and halts.
+	// Register all InterfaceLib/MathLib/PrivateInterfaceLib stubs
+	PPCDispatch::RegisterStdCLibImports();
 	uint32_t resolved = 0;
 	uint32_t catchAll = 0;
 
@@ -224,8 +223,10 @@ static void testPEFIntegration(const char *stdclibPath) {
 	       result.sections.size(), result.exports.size());
 	printf("  Imports: %u pre-registered, %u catch-all\n", resolved, catchAll);
 
-	// All 66 imports should have been resolved (either pre-registered or catch-all)
+	// All 66 imports should resolve against pre-registered stubs — 0 catch-alls
 	assert(resolved + catchAll == 66);
+	printf("  Resolved: %u, Catch-all: %u\n", resolved, catchAll);
+	assert(catchAll == 0);
 
 	// Register StdCLib exports so tools can import from them
 	uint32_t exportCount = 0;
