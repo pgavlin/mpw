@@ -942,6 +942,24 @@ static int cookieToFd(uint32_t cookieHandle) {
 	return -1;
 }
 
+static uint32_t allocateCookieHandle(int fdIndex); // forward decl
+static uint32_t ppcEconEntry = 0; // set by PatchDeviceTable
+
+// Temporarily replace the Handle cookie with the raw fd for Native:: calls.
+// Returns the original cookie value for restoration.
+static uint32_t patchCookieForNative(uint32_t ioEntry) {
+	uint32_t cookie = memoryReadLong(ioEntry + 8);
+	int fd = cookieToFd(cookie);
+	if (fd >= 0) {
+		memoryWriteLong(fd, ioEntry + 8);
+	}
+	return cookie;
+}
+
+static void restoreCookie(uint32_t ioEntry, uint32_t cookie) {
+	memoryWriteLong(cookie, ioEntry + 8);
+}
+
 static void econ_read() {
 	uint32_t ioEntry = GetGPR(3);
 	uint32_t cookie = memoryReadLong(ioEntry + 8);
@@ -964,8 +982,10 @@ static void econ_read() {
 		}
 		SetGPR(3, n < 0 ? (uint32_t)-1 : 0);
 	} else {
-		// File fd: use Native handler (handles text/binary mode)
+		// File fd: patch cookie to raw fd for Native handler
+		uint32_t saved = patchCookieForNative(ioEntry);
 		SetGPR(3, MPW::Native::Read(ioEntry));
+		restoreCookie(ioEntry, saved);
 	}
 }
 
@@ -995,14 +1015,19 @@ static void econ_write() {
 		memoryWriteLong(n < 0 ? 0 : (uint32_t)n, ioEntry + 12);
 		SetGPR(3, n < 0 ? (uint32_t)-1 : 0);
 	} else {
-		// File fd: use Native handler (handles text/binary mode)
+		// File fd: patch cookie to raw fd for Native handler
+		uint32_t saved = patchCookieForNative(ioEntry);
 		SetGPR(3, MPW::Native::Write(ioEntry));
+		restoreCookie(ioEntry, saved);
 	}
 }
 
 static void econ_close() {
 	if (MPW::Trace) fprintf(stderr, "  ECON close()\n");
-	SetGPR(3, MPW::Native::Close(GetGPR(3)));
+	uint32_t ioEntry = GetGPR(3);
+	uint32_t saved = patchCookieForNative(ioEntry);
+	SetGPR(3, MPW::Native::Close(ioEntry));
+	restoreCookie(ioEntry, saved);
 }
 
 static void econ_ioctl() {
@@ -1036,11 +1061,14 @@ static void econ_ioctl() {
 		if (arg) memoryWriteLong(2048, arg);
 		SetGPR(3, 0);
 		break;
-	default:
+	default: {
 		// Forward to standard FSYS ioctl handler for file operations
 		// (FIOREFNUM, FIOLSEEK, FIOSETEOF, etc.)
+		uint32_t saved = patchCookieForNative(ioEntry);
 		SetGPR(3, MPW::Native::IOCtl(ioEntry, cmd, arg));
+		restoreCookie(ioEntry, saved);
 		break;
+	}
 	}
 
 	if (MPW::Trace)
@@ -1049,7 +1077,27 @@ static void econ_ioctl() {
 
 static void econ_faccess() {
 	if (MPW::Trace) fprintf(stderr, "  ECON faccess()\n");
-	SetGPR(3, MPW::Native::Access(GetGPR(3), GetGPR(4), GetGPR(5)));
+	uint32_t name = GetGPR(3);
+	uint32_t op = GetGPR(4);
+	uint32_t parm = GetGPR(5);
+	uint32_t d0 = MPW::Native::Access(name, op, parm);
+
+	// After F_OPEN, ftrap_open writes a bare fd into parm+8 (cookie).
+	// PPC StdCLib expects cookies to be Handles. Wrap the fd in a Handle.
+	// Also set the device pointer (parm+4) so _coRead/_coWrite can find
+	// the device handlers via _getIOPort.
+	if (op == MPW::kF_OPEN && d0 == 0) {
+		uint32_t rawFd = memoryReadLong(parm + 8);
+		uint32_t cookieHandle = allocateCookieHandle(rawFd);
+		if (cookieHandle) {
+			memoryWriteLong(cookieHandle, parm + 8);
+			cookieFdMap[cookieHandle] = rawFd;
+		}
+		// Set device pointer so _coRead/_coWrite can find handlers
+		memoryWriteLong(ppcEconEntry, parm + 4);
+	}
+
+	SetGPR(3, d0);
 }
 
 // Allocate a cookie Handle for a stdio fd.
@@ -1100,6 +1148,7 @@ void PatchDeviceTable(uint32_t mpgmInfoAddr) {
 
 	// Write TVectors into the ECON device table entry (devTable + 24)
 	uint32_t econEntry = devTablePtr + 24;
+	ppcEconEntry = econEntry;
 	// 'ECON' name is already written by MPW::Init()
 	memoryWriteLong(econFaccess, econEntry + 4);
 	memoryWriteLong(econClose, econEntry + 8);
