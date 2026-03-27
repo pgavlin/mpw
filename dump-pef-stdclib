@@ -13189,56 +13189,81 @@ resource 'cfrg' (0) {
 0CCF0 0CC70   X      7C0803A6               mtlr      r0                        ; LR = 8
 0CCF4 0CC74          83E1FFFC               lwz       r31,-0x0004(SP)
 0CCF8 0CC78   X      4E800020               blr
-0CCFC 0CC7C   X      7C0802A6               mflr      r0                        ; LR = 8
+; ===========================================================================
+; _coWrite — console write handler (internal StdCLib function)
+;
+; Called from the stdio layer when flushing stdout/stderr buffers.
+; Args: r3 = ioEntry pointer
+;
+; Cookie handling:
+;   cookie = ioEntry+8 = Handle (Memory Manager)
+;   HLock(cookie)
+;   *cookie = master pointer → cookie data struct
+;   cookie_data+0x0C = connected flag (byte)
+;
+; If connected: calls device write handler via CallUniversalProc
+; If not connected: resolves device by name from cookie_data+0x04
+; ===========================================================================
+0CCFC 0CC7C   X      7C0802A6               mflr      r0
 0CD00 0CC80          BFA1FFF4               stmw      r29,-0x000C(SP)
 0CD04 0CC84          90010008               stw       r0,0x0008(SP)
-0CD08 0CC88          9421FFB0               stwu      SP,-0x0050(SP)
-0CD0C 0CC8C   X      7C7F1B78               mr        r31,r3
-0CD10 0CC90          807F0008               lwz       r3,0x0008(r31)
+0CD08 0CC88          9421FFB0               stwu      SP,-0x0050(SP)            ; frame = 80 bytes
+0CD0C 0CC8C   X      7C7F1B78               mr        r31,r3                    ; r31 = ioEntry
+0CD10 0CC90          807F0008               lwz       r3,0x0008(r31)            ; r3 = cookie Handle
 0CD14 0CC94   X      3BA00000               li        r29,0
-0CD18 0CC98          480043ED               bl        $+0x43EC                  ; 0x00011084
+0CD18 0CC98          480043ED               bl        $+0x43EC                  ; call HLock(cookie)
+                                                                                ; glue at 0x11084 → InterfaceLib::HLock
 0CD1C 0CC9C          80410014               lwz       RTOC,0x0014(SP)
-0CD20 0CCA0          819F0008               lwz       r12,0x0008(r31)
-0CD24 0CCA4          812C0000               lwz       r9,0x0000(r12)
-0CD28 0CCA8          8809000C               lbz       r0,0x000C(r9)
+; --- Dereference cookie Handle to get cookie data ---
+0CD20 0CCA0          819F0008               lwz       r12,0x0008(r31)           ; r12 = cookie Handle
+0CD24 0CCA4          812C0000               lwz       r9,0x0000(r12)            ; r9 = *Handle = master ptr → cookie data
+0CD28 0CCA8          8809000C               lbz       r0,0x000C(r9)             ; r0 = cookie_data+0x0C = connected flag
 0CD2C 0CCAC   X      2C000000               cmpwi     r0,0
-0CD30 0CCB0   X      41820034               beq       $+0x0034                  ; 0x0000CCE4
-0CD34 0CCB4   X      7FE3FB78               mr        r3,r31
-0CD38 0CCB8          48003F65               bl        $+0x3F64                  ; 0x00010C1C
+0CD30 0CCB0   X      41820034               beq       $+0x0034                  ; if not connected → 0xCCE4
+; --- Connected path: call device write handler ---
+0CD34 0CCB4   X      7FE3FB78               mr        r3,r31                    ; r3 = ioEntry
+0CD38 0CCB8          48003F65               bl        $+0x3F64                  ; call error check func (0x10C1C)
 0CD3C 0CCBC          80410014               lwz       RTOC,0x0014(SP)
 0CD40 0CCC0   X      2C030000               cmpwi     r3,0
-0CD44 0CCC4   X      408200BC               bne       $+0x00BC                  ; 0x0000CD80
-0CD48 0CCC8          809F0004               lwz       r4,0x0004(r31)
-0CD4C 0CCCC   X      7FE5FB78               mr        r5,r31
-0CD50 0CCD0          80640010               lwz       r3,0x0010(r4)
-0CD54 0CCD4   X      388000F1               li        r4,241
-0CD58 0CCD8          48004245               bl        $+0x4244                  ; 0x00010F1C
+0CD44 0CCC4   X      408200BC               bne       $+0x00BC                  ; if error → return at 0xCD80
+0CD48 0CCC8          809F0004               lwz       r4,0x0004(r31)            ; r4 = ioEntry+4 = device table entry
+0CD4C 0CCCC   X      7FE5FB78               mr        r5,r31                    ; r5 = ioEntry
+0CD50 0CCD0          80640010               lwz       r3,0x0010(r4)             ; r3 = device+0x10 = write handler TVector
+0CD54 0CCD4   X      388000F1               li        r4,241                    ; r4 = 0xF1 = procInfo
+0CD58 0CCD8          48004245               bl        $+0x4244                  ; call CallUniversalProc(writeHandler, 0xF1, ioEntry)
+                                                                                ; glue at 0x10F1C → InterfaceLib::CallUniversalProc
 0CD5C 0CCDC          80410014               lwz       RTOC,0x0014(SP)
-0CD60 0CCE0          480000A0               b         $+0x00A0                  ; 0x0000CD80
-0CD64 0CCE4          80690004               lwz       r3,0x0004(r9)
-0CD68 0CCE8   X      2C038008               cmpwi     r3,-32760
-0CD6C 0CCEC   X      4082001C               bne       $+0x001C                  ; 0x0000CD08
-0CD70 0CCF0   X      38600009               li        r3,9
+0CD60 0CCE0          480000A0               b         $+0x00A0                  ; → return at 0xCD80
+; --- Not connected path: resolve device by name ---
+0CD64 0CCE4          80690004               lwz       r3,0x0004(r9)             ; r3 = cookie_data+0x04 (device name ptr?)
+0CD68 0CCE8   X      2C038008               cmpwi     r3,-32760                 ; compare to 0xFFFF8008 = sentinel "no device"
+0CD6C 0CCEC   X      4082001C               bne       $+0x001C                  ; if not sentinel → try to resolve (0xCD08)
+; --- No device (sentinel): return EBADF (9) ---
+0CD70 0CCF0   X      38600009               li        r3,9                      ; return EBADF
 0CD74 0CCF4          38210050               addi      SP,SP,80
 0CD78 0CCF8          80010008               lwz       r0,0x0008(SP)
-0CD7C 0CCFC   X      7C0803A6               mtlr      r0                        ; LR = 8
+0CD7C 0CCFC   X      7C0803A6               mtlr      r0
 0CD80 0CD00          BBA1FFF4               lmw       r29,-0x000C(SP)
 0CD84 0CD04   X      4E800020               blr
-0CD88 0CD08          38690004               addi      r3,r9,4
-0CD8C 0CD0C          48003929               bl        $+0x3928                  ; 0x00010634
+; --- Resolve device: pass cookie_data+4 as device name to resolver ---
+0CD88 0CD08          38690004               addi      r3,r9,4                   ; r3 = &cookie_data[4] (device name C string)
+0CD8C 0CD0C          48003929               bl        $+0x3928                  ; call device_resolver (code 0x8EFC)
+                                                                                ; glue at 0x10634 → internal TVector RTOC+0x460
 0CD90 0CD10          80410014               lwz       RTOC,0x0014(SP)
-0CD94 0CD14          813F000C               lwz       r9,0x000C(r31)
-0CD98 0CD18   X      7C7E1B78               mr        r30,r3
+; r3 = resolved device entry (or 0 if not found)
+0CD94 0CD14          813F000C               lwz       r9,0x000C(r31)            ; r9 = ioEntry+0x0C = transfer count
+0CD98 0CD18   X      7C7E1B78               mr        r30,r3                    ; r30 = device entry
 0CD9C 0CD1C   X      281E0000               cmplwi    r30,0x0000
-0CDA0 0CD20   X      4082002C               bne       $+0x002C                  ; 0x0000CD4C
-0CDA4 0CD24          807F0010               lwz       r3,0x0010(r31)
-0CDA8 0CD28          93BF000C               stw       r29,0x000C(r31)
-0CDAC 0CD2C          7C891A14               add       r4,r9,r3
-0CDB0 0CD30          909F0010               stw       r4,0x0010(r31)
-0CDB4 0CD34   X      38600009               li        r3,9
+0CDA0 0CD20   X      4082002C               bne       $+0x002C                  ; if found → call handler (0xCD4C)
+; --- Device not found: update ioEntry with remaining data ---
+0CDA4 0CD24          807F0010               lwz       r3,0x0010(r31)            ; r3 = ioEntry+0x10 = buffer ptr
+0CDA8 0CD28          93BF000C               stw       r29,0x000C(r31)           ; ioEntry+0x0C = 0 (count = 0)
+0CDAC 0CD2C          7C891A14               add       r4,r9,r3                  ; r4 = buffer + count
+0CDB0 0CD30          909F0010               stw       r4,0x0010(r31)            ; update buffer ptr past written data
+0CDB4 0CD34   X      38600009               li        r3,9                      ; return EBADF
 0CDB8 0CD38          38210050               addi      SP,SP,80
 0CDBC 0CD3C          80010008               lwz       r0,0x0008(SP)
-0CDC0 0CD40   X      7C0803A6               mtlr      r0                        ; LR = 8
+0CDC0 0CD40   X      7C0803A6               mtlr      r0
 0CDC4 0CD44          BBA1FFF4               lmw       r29,-0x000C(SP)
 0CDC8 0CD48   X      4E800020               blr
 0CDCC 0CD4C          913E000C               stw       r9,0x000C(r30)
@@ -13259,58 +13284,83 @@ resource 'cfrg' (0) {
 0CE08 0CD88   X      7C0803A6               mtlr      r0                        ; LR = 8
 0CE0C 0CD8C          BBA1FFF4               lmw       r29,-0x000C(SP)
 0CE10 0CD90   X      4E800020               blr
-0CE14 0CD94   X      7C0802A6               mflr      r0                        ; LR = 8
+; ===========================================================================
+; _coIoctl — console ioctl handler (internal StdCLib function)
+;
+; Args: r3 = ioEntry, r4 = cmd, r5 = arg
+;
+; Cookie handling (same as _coWrite):
+;   cookie = ioEntry+8 = Handle
+;   HLock(cookie)
+;   cookie_data = *(*Handle)
+;   connected = cookie_data+0x0C (byte)
+;
+; If connected: calls device ioctl handler via CallUniversalProc(handler, 0xFF1, ioEntry, cmd, arg)
+; If not connected: handles FIODUPFD and FIOINTERACTIVE directly
+; ===========================================================================
+0CE14 0CD94   X      7C0802A6               mflr      r0
 0CE18 0CD98          BFA1FFF4               stmw      r29,-0x000C(SP)
 0CE1C 0CD9C          90010008               stw       r0,0x0008(SP)
-0CE20 0CDA0          9421FFB0               stwu      SP,-0x0050(SP)
-0CE24 0CDA4   X      7C7F1B78               mr        r31,r3
-0CE28 0CDA8          807F0008               lwz       r3,0x0008(r31)
-0CE2C 0CDAC   X      7CBD2B78               mr        r29,r5
-0CE30 0CDB0   X      7C9E2378               mr        r30,r4
-0CE34 0CDB4          480042D1               bl        $+0x42D0                  ; 0x00011084
+0CE20 0CDA0          9421FFB0               stwu      SP,-0x0050(SP)            ; frame = 80 bytes
+0CE24 0CDA4   X      7C7F1B78               mr        r31,r3                    ; r31 = ioEntry
+0CE28 0CDA8          807F0008               lwz       r3,0x0008(r31)            ; r3 = cookie Handle
+0CE2C 0CDAC   X      7CBD2B78               mr        r29,r5                    ; r29 = arg
+0CE30 0CDB0   X      7C9E2378               mr        r30,r4                    ; r30 = cmd
+0CE34 0CDB4          480042D1               bl        $+0x42D0                  ; call HLock(cookie)
+                                                                                ; glue at 0x11084 → InterfaceLib::HLock
 0CE38 0CDB8          80410014               lwz       RTOC,0x0014(SP)
-0CE3C 0CDBC          819F0008               lwz       r12,0x0008(r31)
-0CE40 0CDC0          806C0000               lwz       r3,0x0000(r12)
-0CE44 0CDC4          8803000C               lbz       r0,0x000C(r3)
+; --- Dereference cookie Handle ---
+0CE3C 0CDBC          819F0008               lwz       r12,0x0008(r31)           ; r12 = cookie Handle
+0CE40 0CDC0          806C0000               lwz       r3,0x0000(r12)            ; r3 = *Handle = master ptr
+0CE44 0CDC4          8803000C               lbz       r0,0x000C(r3)             ; r0 = cookie_data+0x0C = connected
 0CE48 0CDC8   X      2C000000               cmpwi     r0,0
-0CE4C 0CDCC   X      41820044               beq       $+0x0044                  ; 0x0000CE10
-0CE50 0CDD0   X      7FE3FB78               mr        r3,r31
-0CE54 0CDD4          48003E49               bl        $+0x3E48                  ; 0x00010C1C
+0CE4C 0CDCC   X      41820044               beq       $+0x0044                  ; if not connected → 0xCE10
+; --- Connected: call device ioctl handler ---
+0CE50 0CDD0   X      7FE3FB78               mr        r3,r31                    ; r3 = ioEntry
+0CE54 0CDD4          48003E49               bl        $+0x3E48                  ; call error check (0x10C1C)
 0CE58 0CDD8          80410014               lwz       RTOC,0x0014(SP)
 0CE5C 0CDDC   X      7C691B78               mr        r9,r3
 0CE60 0CDE0   X      2C090000               cmpwi     r9,0
-0CE64 0CDE4   X      4082014C               bne       $+0x014C                  ; 0x0000CF30
-0CE68 0CDE8          809F0004               lwz       r4,0x0004(r31)
-0CE6C 0CDEC   X      7FE5FB78               mr        r5,r31
-0CE70 0CDF0          80640014               lwz       r3,0x0014(r4)
-0CE74 0CDF4   X      7FC6F378               mr        r6,r30
-0CE78 0CDF8   X      7FA7EB78               mr        r7,r29
-0CE7C 0CDFC   X      38800FF1               li        r4,4081
-0CE80 0CE00          4800411D               bl        $+0x411C                  ; 0x00010F1C
+0CE64 0CDE4   X      4082014C               bne       $+0x014C                  ; if error → return at 0xCF30
+0CE68 0CDE8          809F0004               lwz       r4,0x0004(r31)            ; r4 = ioEntry+4 = device entry
+0CE6C 0CDEC   X      7FE5FB78               mr        r5,r31                    ; r5 = ioEntry
+0CE70 0CDF0          80640014               lwz       r3,0x0014(r4)             ; r3 = device+0x14 = ioctl handler
+0CE74 0CDF4   X      7FC6F378               mr        r6,r30                    ; r6 = cmd
+0CE78 0CDF8   X      7FA7EB78               mr        r7,r29                    ; r7 = arg
+0CE7C 0CDFC   X      38800FF1               li        r4,4081                   ; r4 = 0xFF1 = procInfo (3 args)
+0CE80 0CE00          4800411D               bl        $+0x411C                  ; call CallUniversalProc(ioctlHandler, 0xFF1, ioEntry, cmd, arg)
+                                                                                ; glue at 0x10F1C → InterfaceLib::CallUniversalProc
 0CE84 0CE04          80410014               lwz       RTOC,0x0014(SP)
 0CE88 0CE08   X      7C691B78               mr        r9,r3
-0CE8C 0CE0C          48000124               b         $+0x0124                  ; 0x0000CF30
-0CE90 0CE10   X      2C1E6601               cmpwi     r30,26113
-0CE94 0CE14   X      4182003C               beq       $+0x003C                  ; 0x0000CE50
-0CE98 0CE18   X      2C1E6602               cmpwi     r30,26114
-0CE9C 0CE1C   X      4182001C               beq       $+0x001C                  ; 0x0000CE38
-0CEA0 0CE20   X      38600016               li        r3,22
+0CE8C 0CE0C          48000124               b         $+0x0124                  ; → return at 0xCF30
+; === Not connected path: handle FIODUPFD and FIOINTERACTIVE directly ===
+0CE90 0CE10   X      2C1E6601               cmpwi     r30,26113                 ; cmd == FIODUPFD (0x6601)?
+0CE94 0CE14   X      4182003C               beq       $+0x003C                  ; yes → 0xCE50 (FIODUPFD handler)
+0CE98 0CE18   X      2C1E6602               cmpwi     r30,26114                 ; cmd == FIOINTERACTIVE (0x6602)?
+0CE9C 0CE1C   X      4182001C               beq       $+0x001C                  ; yes → 0xCE38 (return 0 = interactive)
+; --- Unknown command: return EINVAL (22) ---
+0CEA0 0CE20   X      38600016               li        r3,22                     ; EINVAL
 0CEA4 0CE24          38210050               addi      SP,SP,80
 0CEA8 0CE28          80010008               lwz       r0,0x0008(SP)
-0CEAC 0CE2C   X      7C0803A6               mtlr      r0                        ; LR = 8
+0CEAC 0CE2C   X      7C0803A6               mtlr      r0
 0CEB0 0CE30          BBA1FFF4               lmw       r29,-0x000C(SP)
 0CEB4 0CE34   X      4E800020               blr
+; --- FIOINTERACTIVE: return 0 (yes, interactive) ---
 0CEB8 0CE38   X      38600000               li        r3,0
 0CEBC 0CE3C          38210050               addi      SP,SP,80
 0CEC0 0CE40          80010008               lwz       r0,0x0008(SP)
-0CEC4 0CE44   X      7C0803A6               mtlr      r0                        ; LR = 8
+0CEC4 0CE44   X      7C0803A6               mtlr      r0
 0CEC8 0CE48          BBA1FFF4               lmw       r29,-0x000C(SP)
 0CECC 0CE4C   X      4E800020               blr
-0CED0 0CE50          80830000               lwz       r4,0x0000(r3)
-0CED4 0CE54   X      39200009               li        r9,9
-0CED8 0CE58   X      2C048008               cmpwi     r4,-32760
-0CEDC 0CE5C   X      41820070               beq       $+0x0070                  ; 0x0000CECC
-0CEE0 0CE60          480037D5               bl        $+0x37D4                  ; 0x00010634
+; --- FIODUPFD: resolve device, call ioctl through device handler ---
+; r3 = master ptr (cookie data)
+0CED0 0CE50          80830000               lwz       r4,0x0000(r3)             ; r4 = cookie_data[0] (device name or sentinel)
+0CED4 0CE54   X      39200009               li        r9,9                      ; default error = EBADF
+0CED8 0CE58   X      2C048008               cmpwi     r4,-32760                 ; sentinel -0x7FF8?
+0CEDC 0CE5C   X      41820070               beq       $+0x0070                  ; yes → skip to 0xCECC (use default device)
+; Not sentinel: resolve device by name
+0CEE0 0CE60          480037D5               bl        $+0x37D4                  ; call device_resolver(&cookie_data[0])
+                                                                                ; glue at 0x10634 → internal (code 0x8EFC)
 0CEE4 0CE64          80410014               lwz       RTOC,0x0014(SP)
 0CEE8 0CE68   X      28030000               cmplwi    r3,0x0000
 0CEEC 0CE6C   X      4082001C               bne       $+0x001C                  ; 0x0000CE88
