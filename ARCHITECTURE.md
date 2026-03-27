@@ -9,7 +9,7 @@ mpw/
 ├── bin/          Entry points: emulator (loader.cpp), disassembler, debugger,
 │                 profiler, plus Python scripts for HFS image tooling
 ├── lsp/          Language Server Protocol server for MPW development tools
-├── cpu/          Motorola 680x0 CPU emulation (from WinFellow)
+├── cpu/          CPU emulation: M68K (Unicorn) and PPC (Unicorn)
 ├── toolbox/      Macintosh Toolbox/OS trap implementations (~40 files)
 ├── mpw/          MPW environment emulation (file I/O, env vars, errno mapping)
 ├── macos/        System definitions (trap tables, system equates, error codes)
@@ -67,37 +67,39 @@ The main entry point is `bin/loader.cpp`. Startup proceeds as follows:
 
 ## CPU Emulation (`cpu/`)
 
-Adapted from the **WinFellow** Amiga emulator (GPL v2). The core consists of large generated C files implementing full 68000/010/020/030 instruction decode and execution.
+Both 68K and PPC emulation use the [Unicorn Engine](https://www.unicorn-engine.org/) (LGPL), with [Capstone](https://www.capstone-engine.org/) for disassembly.
 
-### Key Files
+### M68K (`cpu/m68k/`)
 
 | File | Purpose |
 |------|---------|
-| `CpuModule.h` | Public CPU interface |
-| `CpuModule.c` | Initialization (`cpuStartup`, `cpuHardReset`) |
-| `CpuModule_Instructions.c` | Instruction execution (generated, ~4000 lines) |
-| `CpuModule_Disassembler.c` | Instruction disassembly |
-| `CpuModule_EffectiveAddress.c` | Address mode calculation |
-| `CpuModule_Exceptions.c` | Exception/trap handling |
-| `CpuModule_Interrupts.c` | Interrupt dispatch |
-| `CpuModule_Flags.c` | Condition code computation |
-| `CpuModule_InternalState.c` | Register file, prefetch, state save/restore |
-| `CpuIntegration.c` | Integration layer between CPU and host |
+| `CpuModule.h` | Public CPU interface (register access, execution, exception callbacks) |
+| `fmem.h` | Memory access functions (big-endian reads/writes on shared buffer) |
+| `defs.h` | Common types (`BOOLE`) |
+| `m68k_uc.cpp` | Unicorn M68K wrapper implementing the above APIs |
 
-### Execution Model
+### PPC (`cpu/ppc/`)
+
+| File | Purpose |
+|------|---------|
+| `ppc.h` | PPC API (Init, Execute, Step, register access, code hooks) |
+| `ppc.cpp` | Unicorn PPC wrapper, sc interrupt hook, Capstone disassembly |
+
+### M68K Execution Model
 
 ```
 cpuExecuteInstruction()
-  ├── Check pending interrupts → cpuSetUpInterrupt() if raised
-  ├── Fetch opcode at PC (16-bit word)
-  ├── Lookup in cpu_opcode_data_current[] function pointer table
-  ├── Execute instruction handler (updates regs, flags, PC)
-  └── Return cycle count
+  ├── uc_emu_start(uc, pc, 0, 0, 1)    — execute one instruction
+  ├── If UC_ERR_EXCEPTION:
+  │     ├── Read opcode at PC
+  │     ├── A-line (0xAxxx) → call registered alineFunc callback
+  │     └── F-line (0xFxxx) → call registered flineFunc callback
+  └── Return instruction count (1)
 ```
 
-Special opcodes trigger exceptions rather than normal execution:
-- **A-line** (`0xAxxx`) — calls the registered A-line exception handler (Toolbox traps)
-- **F-line** (`0xFxxx`) — calls the registered F-line exception handler (MPW I/O traps)
+Special opcodes trigger Unicorn exceptions:
+- **A-line** (`0xAxxx`) — dispatched to `ToolBox::dispatch` (Toolbox traps)
+- **F-line** (`0xFxxx`) — dispatched to `MPW::dispatch` (MPW I/O traps)
 
 ### Supported Models
 

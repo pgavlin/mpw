@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MPW (Macintosh Programmer's Workshop) Emulator — emulates the MPW command-line environment for both Motorola 68000 and PowerPC CPUs, allowing classic Mac MPW tools to run on modern macOS and Linux. 68K emulation uses an adapted WinFellow CPU core; PPC emulation uses the Unicorn Engine with the real Mac OS StdCLib shared library running natively. Requires libedit for the debugger. See `PPC_STATUS.md` for detailed PPC emulator documentation.
+MPW (Macintosh Programmer's Workshop) Emulator — emulates the MPW command-line environment for both Motorola 68000 and PowerPC CPUs, allowing classic Mac MPW tools to run on modern macOS and Linux. Both CPU architectures are emulated via the Unicorn Engine. PPC tools use the real Mac OS StdCLib shared library running natively. Requires libedit for the debugger. See `PPC_STATUS.md` for detailed PPC emulator documentation.
 
 ## Build Commands
 
@@ -31,7 +31,7 @@ Tests in `test/` are MPW-hosted programs (compiled and linked using MPW tools vi
 
 The emulator has five main layers:
 
-- **`cpu/m68k/`** — Motorola 680x0 CPU emulation, adapted from the WinFellow project. Mostly large generated C files implementing instruction decoding, execution, and disassembly. Integration point: `CpuIntegration.c`.
+- **`cpu/m68k/`** — Motorola 680x0 CPU emulation via Unicorn Engine. `m68k_uc.cpp` wraps Unicorn with register access, A-line/F-line exception dispatch, and Capstone-based disassembly.
 
 - **`cpu/ppc/`** — PowerPC CPU emulation via Unicorn Engine. `ppc.cpp` wraps Unicorn with PPC register access, `sc` interrupt handling for CFM stub dispatch, code trace/profiler hooks, and Capstone-based disassembly.
 

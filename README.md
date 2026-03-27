@@ -14,13 +14,14 @@ macOS 10.8+ and Linux are supported. Both case-sensitive and case-insensitive fi
 
 ## License
 
-The 680x0 CPU code is from [WinFellow](http://fellow.sourceforge.net) and is 
-licensed under GPL v2 or later.  Consequently, the compiled binary is licensed 
-under the GPL v2 as well.
+CPU emulation for both 68K and PowerPC uses [Unicorn Engine](https://www.unicorn-engine.org/) (LGPL v2).
+Disassembly uses [Capstone](https://www.capstone-engine.org/) (BSD).
 
-The memory allocator (NewHandle/NewPointer) code is from [mempoolite](https://github.com/jeftyneg/mempoolite), 
-which is a fork of the SQLite zero-alloc allocator by Jefty Negapatan and D. Richard Hipp.  It, as is SQLite, 
+The memory allocator (NewHandle/NewPointer) code is from [mempoolite](https://github.com/jeftyneg/mempoolite),
+which is a fork of the SQLite zero-alloc allocator by Jefty Negapatan and D. Richard Hipp.  It, as is SQLite,
 is in the public domain.
+
+All other code is BSD 2-Clause.
 
 ## Building
 
