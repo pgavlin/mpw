@@ -1,41 +1,30 @@
 /*
  * FileRead — minimal PPC file I/O test tool.
- * Tests both stdio (fopen/fread) and low-level (open/read) I/O.
  */
 
 #include <stdio.h>
 #include <string.h>
-#include <fcntl.h>
-#include <errno.h>
 
 int main(int argc, char *argv[])
 {
-	int fd, n;
+	FILE *fp;
 	char buf[64];
+	size_t n;
 
-	if (argc < 2) {
-		fprintf(stderr, "Usage: FileRead <file>\n");
-		return 1;
-	}
+	if (argc < 2) return 1;
 
-	/* Test low-level open/read first */
-	fd = open(argv[1], O_RDONLY);
-	fprintf(stdout, "open: fd=%d\n", fd);
+	fp = fopen(argv[1], "r");
+	if (!fp) return 2;
 
-	if (fd < 0) {
-		fprintf(stderr, "open failed\n");
-		return 2;
-	}
+	/* This fprintf to stderr corrupts fp? */
+	fprintf(stderr, "fopen ok\n");
 
 	memset(buf, 0, sizeof(buf));
-	n = read(fd, buf, 16);
-	fprintf(stdout, "read: n=%d\n", n);
+	n = fread(buf, 1, 20, fp);
 
-	if (n > 0) {
-		buf[n] = 0;
-		fprintf(stdout, "data: %s\n", buf);
-	}
+	fprintf(stderr, "fread: %d bytes\n", (int)n);
+	fprintf(stderr, "data: %.20s\n", buf);
 
-	close(fd);
+	fclose(fp);
 	return 0;
 }

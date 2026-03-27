@@ -1055,12 +1055,7 @@ static void econ_ioctl() {
 		break;
 	}
 	case 0x6602: // FIOINTERACTIVE
-		SetGPR(3, 0); // 0 = interactive
-		break;
 	case 0x6603: // FIOBUFSIZE
-		if (arg) memoryWriteLong(2048, arg);
-		SetGPR(3, 0);
-		break;
 	default: {
 		// Forward to standard FSYS ioctl handler for file operations
 		// (FIOREFNUM, FIOLSEEK, FIOSETEOF, etc.)
