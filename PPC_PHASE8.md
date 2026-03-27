@@ -1,129 +1,108 @@
-# Phase 8: Additional InterfaceLib Wrappers for Tools
+# Phase 8: Additional InterfaceLib Wrappers and File I/O for Tools
 
-**Goal:** Implement InterfaceLib wrappers for symbols that PPC tools (other than StdCLib) import directly.
+**Goal:** Implement InterfaceLib wrappers and file I/O support so PPC tools beyond Hello can run.
 
 **Depends on:** Phases 5-7 (Hello, world! runs end-to-end).
 
-**Status:** Not started. Hello tool works with the 66 StdCLib imports from Phase 4. Additional wrappers will be needed as more complex tools are tested.
+**Status:** In progress. 29 InterfaceLib stubs added, FSYS device handlers working, stdio file I/O working. DumpPEF gets through file open/read but crashes during PEF parsing (unmapped memory read).
 
 ---
 
-## Overview
+## Completed Work
 
-Phase 4 implements exactly the 66 symbols StdCLib imports. PPC tools may import additional symbols from InterfaceLib directly. The catch-all handler identifies missing stubs at runtime:
-```
-PPC FATAL: unimplemented stub InterfaceLib::SomeFunction called
-  r3=0x... r4=0x... r5=0x... LR=0x...
-```
+### InterfaceLib Wrappers (29 new stubs)
 
-This phase is demand-driven — add wrappers as tools require them. Use `--debug` to set breakpoints and inspect state when a missing stub fires.
+All 44 InterfaceLib symbols that DumpPEF imports are now registered. New wrappers were added by reusing existing `Native::` functions:
+
+- **Cursor ops:** ShowCursor, GetCursor, SetCursor (no-ops for CLI)
+- **MM extras:** SetHandleSize, HGetState, HSetState, HPurge, HNoPurge, MoveHHi (new `MM::Native::` functions factored out of 68K handlers)
+- **RM extras:** HomeResFile, GetResource, Get1Resource, GetResAttrs, GetResInfo, GetResourceSizeOnDisk, SetResLoad, UseResFile, OpenResFile, CloseResFile, UpdateResFile, AddResource, ChangedResource, RemoveResource, ReadPartialResource (new `RM::Native::Get1Resource`, `CreateResFile`, `ReadPartialResource`)
+- **File Manager:** PBReadSync, PBHGetFInfoSync
+- **Low memory:** LMGetBootDrive, LMGetCurrentA5
+- **Misc:** FindFolder (returns fnfErr), numtostring, createresfile, openresfile
+
+### MPW File I/O Refactoring
+
+Factored `ftrap_access/read/write/close/ioctl` into `MPW::Native::` functions shared by 68K and PPC:
+
+| Native Function | Source File | Called By |
+|-----------------|------------|-----------|
+| `MPW::Native::Access(name, op, parm)` | `mpw/mpw_access.cpp` | `ftrap_access` (68K), `econ_faccess`/`fsys_faccess` (PPC) |
+| `MPW::Native::Read(parm)` | `mpw/mpw_io.cpp` | `ftrap_read` (68K), `econ_read`/`fsys_read` (PPC) |
+| `MPW::Native::Write(parm)` | `mpw/mpw_io.cpp` | `ftrap_write` (68K), `econ_write`/`fsys_write` (PPC) |
+| `MPW::Native::Close(parm)` | `mpw/mpw_close.cpp` | `ftrap_close` (68K), `econ_close`/`fsys_close` (PPC) |
+| `MPW::Native::IOCtl(parm, cmd, arg)` | `mpw/mpw_ioctl.cpp` | `ftrap_ioctl` (68K), `econ_ioctl`/`fsys_ioctl` (PPC) |
+
+### FSYS + ECON Device Handlers
+
+Both FSYS and ECON device table entries now have PPC-callable TVectors. The ECON handlers delegate to `MPW::Native::` for file operations (open, read, write, close, ioctl), handling console fds specially for direct host I/O with CR→LF conversion.
+
+Key design: on 68K, FSYS and ECON share the same trap handlers. On PPC, the ECON handlers serve as the unified entry point (since all IO table entries point to ECON), and forward non-console operations to `MPW::Native::`.
+
+### Handle Cookie Wrapping
+
+When `econ_faccess` opens a file via `MPW::Native::Access`, `ftrap_open` writes a raw fd as the cookie. The PPC handler wraps it in a Handle (via `allocateCookieHandle`) and registers it in `cookieFdMap`, matching the convention StdCLib expects. The device pointer (`ioEntry+4`) is also set to the ECON device entry so `_coRead`/`_coWrite` can find handlers via `_getIOPort`.
+
+For Native:: calls that expect raw fd cookies, `patchCookieForNative`/`restoreCookie` temporarily swap the Handle for the raw fd.
 
 ---
 
-## Current State
+## Resolved Bugs
 
-The Hello tool imports 10 symbols from StdCLib (fprintf, exit, __setjmp, _BreakPoint, _IntEnv, __C_phase, __target_for_exit, _exit_status, _iob, __NubAt3), all of which are resolved via StdCLib's exports. StdCLib in turn imports 66 symbols from InterfaceLib/MathLib/PrivateInterfaceLib, all implemented in Phase 4.
+### ECON read/write count field (RESOLVED)
 
-More complex tools (compilers, linkers, DumpPEF, etc.) will import directly from InterfaceLib. Use `mpw DumpPEF -do All -pi u -a -fmt on <tool>` to see what a tool needs before running it.
+The ECON console read/write handlers were writing bytes transferred to `ioEntry+12`, but StdCLib expects remaining bytes (`count - transferred`). This caused accumulated/repeated output. Fixed to match `MPW::Native::Read/Write` convention.
+
+### FIOINTERACTIVE/FIOBUFSIZE for file fds (RESOLVED)
+
+The ECON ioctl handler was hardcoding FIOINTERACTIVE=0 (interactive) and FIOBUFSIZE=2048 for ALL fds. For file fds, these need to go through `MPW::Native::IOCtl` which calls `isatty()` and uses proper buffer logic. Fixed by forwarding all ioctl commands through the Native handler.
+
+### fread returning 0 after fprintf (RESOLVED)
+
+Root cause was the FIOINTERACTIVE bug above — StdCLib treated the file as a terminal and set up line-buffered mode, which interacted badly with buffer initialization. Forwarding to Native::IOCtl fixed this.
+
+---
+
+## Current State: DumpPEF
+
+PPC DumpPEF (`~/mpw/Tools/DumpPEF`) runs without unimplemented stub errors. File I/O works — it opens the resource fork, reads the `cfrg` resource, and opens the data fork. But it crashes during PEF container parsing:
+
+```
+PPC: execution error at PC=00F24A04: Invalid memory read (UC_ERR_READ_UNMAPPED)
+```
+
+This is an unmapped memory access in StdCLib code (offset 0x14A04 in the code section). Needs investigation — likely a buffer allocation that returned an address outside mapped memory, or a pointer arithmetic overflow.
+
+### FileRead Test Tool
+
+`tools/FileRead` exercises file I/O paths. Confirmed working:
+- `open()`/`read()`/`close()` (low-level) ✓
+- `fopen()`/`fgetc()`/`fclose()` (stdio) ✓
+- `fopen()`/`fread()`/`fclose()` (stdio) ✓
+- `fprintf()` to stdout/stderr between fopen and fread ✓
 
 ---
 
 ## Known Working Infrastructure
 
-These subsystems are validated end-to-end and can be built upon:
-
 | Subsystem | Status |
 |-----------|--------|
-| PPC CPU (Unicorn) | Working. MSR[FP]=1 for FP instructions. |
+| PPC CPU (Unicorn) | Working. MSR[FP]=1. |
 | PEF loader | Working. pidata decompression, full relocation engine. |
 | CFM stubs (sc dispatch) | Working. On-demand library loading. |
-| Memory Manager (NewPtr/NewHandle/HLock/etc.) | Working. Note: PPC SP must be in stack area, not pool area. |
-| ECON device handlers | Working. read/write/close/ioctl/faccess. |
-| Handle-based cookies | Working. Proper NewHandle allocation. |
+| Memory Manager | Working. PPC SP in stack area, not pool area. |
+| ECON device handlers | Working. Console + file I/O via Native:: delegation. |
+| FSYS device handlers | Working. Direct Native:: calls. |
+| Handle-based cookies | Working. Proper NewHandle, cookieFdMap, patchCookieForNative. |
+| MPW file I/O (Native::) | Working. Shared between 68K and PPC. |
 | CallUniversalProc trampoline | Working. PPC TVector dispatch. |
 | Interactive debugger | Working. PPC step/break/registers/disassembly. |
 | pef_inspect tool | Working. Structural queries on PEF binaries. |
+| 95 InterfaceLib stubs | Working. 66 from Phase 4 + 29 from Phase 8. |
 
 ---
 
-## Likely Additional Symbols
+## Next Steps
 
-### Memory Manager extras
-
-| Symbol | Implementation |
-|---|---|
-| `NewPtrClear` | `MM::Native::NewPtr(r3, true, ptr)` |
-| `NewHandleClear` | `MM::Native::NewHandle(r3, true, h)` |
-| `GetHandleSize` | `MM::Native::GetHandleSize(r3, sz)` |
-| `SetHandleSize` | `MM::Native::SetHandleSize(r3, r4)` |
-| `BlockMoveData` | Same as BlockMove |
-| `HandleZone` | Return current zone |
-| `HGetState` / `HSetState` | Return 0 / no-op |
-| `HNoPurge` / `HPurge` | No-op |
-| `MoveHHi` | No-op |
-
-### Resource Manager extras
-
-| Symbol | Implementation |
-|---|---|
-| `GetResource` | `RM::Native::GetResource(r3, r4, handle)` |
-| `Get1Resource` | Get1Resource variant |
-| `SetResLoad` | `RM::Native::SetResLoad(r3)` |
-| `UseResFile` | `RM::Native::UseResFile(r3)` |
-| `OpenResFile` | `RM::Native::OpenResFile(readPString(r3))` |
-| `CloseResFile` | `RM::Native::CloseResFile(r3)` |
-| `HomeResFile` | `RM::Native::HomeResFile(r3)` |
-| `GetResAttrs` | `RM::Native::GetResAttrs(r3)` |
-| `GetResInfo` | Bridge to `RM::Native::GetResInfo` |
-| `GetResourceSizeOnDisk` | `RM::Native::GetResourceSizeOnDisk(r3)` |
-| `AddResource` | `RM::Native::AddResource(r3, r4, r5, readPString(r6))` |
-| `ChangedResource` | `RM::Native::ChangedResource(r3)` |
-| `UpdateResFile` | `RM::Native::UpdateResFile(r3)` |
-| `RemoveResource` | `RM::Native::RemoveResource(r3)` |
-| `ReadPartialResource` | Custom implementation |
-
-### File Manager extras
-
-| Symbol | Implementation |
-|---|---|
-| `PBReadSync` | `OS::Native::Read(r3)` |
-| `PBWriteSync` | `OS::Native::Write(r3)` |
-| `GetToolTrapAddress` | Bridge to existing 68K handler |
-| `GetOSTrapAddress` | Bridge to existing 68K handler |
-| `ReadDateTime` | Same as GetDateTime |
-
-### Misc extras
-
-| Symbol | Implementation |
-|---|---|
-| `LMGetBootDrive` | `return memoryReadWord(0x0210)` |
-| `FindFolder` | Return fnfErr (-43) |
-| `numtostring` | Convert r3 to Pascal string at r4 |
-| `GetCursor` / `SetCursor` / `ShowCursor` | No-op (CLI emulator) |
-
----
-
-## Implementation
-
-Add wrappers to `toolbox/ppc_dispatch.cpp` as a new registration function:
-
-```cpp
-namespace PPCDispatch {
-    void RegisterStdCLibImports();  // Phase 4
-    void RegisterToolImports();     // Phase 8
-}
-```
-
-`RegisterToolImports()` is called after `RegisterStdCLibImports()` in the loader. Any symbol already registered by Phase 4 is skipped (RegisterStub returns the existing TVector).
-
----
-
-## Validation
-
-Run various PPC MPW tools and verify no catch-all stubs fire. Add wrappers incrementally as needed.
-
-### Test progression
-1. Simple tools (Hello — done ✓)
-2. DumpPEF (PPC version, if available)
-3. Compilers (SC, MrC)
-4. Linkers (PPCLink)
+1. Investigate DumpPEF crash at `0xF24A04` (unmapped memory read)
+2. Test additional PPC tools (compilers, linkers) and add stubs as needed
