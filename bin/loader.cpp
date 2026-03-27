@@ -49,6 +49,7 @@ extern "C" void cpuSetRaiseInterrupt(BOOLE raise_irq);
 #include <toolbox/toolbox.h>
 #include <toolbox/mm.h>
 #include <toolbox/os.h>
+#include <toolbox/rm.h>
 #include <toolbox/path_utils.h>
 #include <toolbox/loader.h>
 #include <toolbox/pef_loader.h>
@@ -911,12 +912,48 @@ int main(int argc, char **argv)
 	MPW::Init(argc, argv);
 
 	// Detect PPC vs 68K.
-	// Default to 68K — many tools are fat binaries with both PEF and CODE.
-	// Use --ppc to force PPC mode.
+	// --ppc/--68k force the mode. Otherwise, try to load CODE resources
+	// (68K). If that fails, check for a PEF data fork and use PPC.
 	bool usePPC;
 	if (Flags.forcePPC) usePPC = true;
 	else if (Flags.force68K) usePPC = false;
-	else usePPC = false; // default to 68K
+	else {
+		// Auto-detect: check if the file has CODE resources (68K).
+		// If not, check for PEF magic in the data fork.
+		int16_t refNum = -1;
+		uint16_t err = RM::Native::OpenResourceFile(command, 1, refNum);
+		bool hasCode = false;
+		if (!err) {
+			uint32_t codeHandle = 0;
+			hasCode = (RM::Native::GetResource(0x434F4445 /*'CODE'*/, 0, codeHandle) == 0
+			           && codeHandle != 0);
+			RM::Native::CloseResFile(refNum);
+		}
+		if (hasCode) {
+			usePPC = false;
+		} else {
+			// No CODE resources — check for PEF data fork.
+			std::string resolved = OS::resolve_path_ci(command);
+			FILE *f = fopen(resolved.c_str(), "rb");
+			usePPC = false;
+			if (f) {
+				uint8_t magic[8];
+				if (fread(magic, 1, 8, f) == 8) {
+					// PEF magic: 'Joy!' 'peff'
+					usePPC = (magic[0] == 'J' && magic[1] == 'o' &&
+					          magic[2] == 'y' && magic[3] == '!' &&
+					          magic[4] == 'p' && magic[5] == 'e' &&
+					          magic[6] == 'f' && magic[7] == 'f');
+				}
+				fclose(f);
+			}
+			if (!usePPC) {
+				fprintf(stderr, "Unable to load command %s: no CODE resources or PEF data fork\n",
+				        command.c_str());
+				exit(EX_SOFTWARE);
+			}
+		}
+	}
 
 	if (usePPC) {
 		// 68K CPU still needs basic init for Gestalt bridge etc.
