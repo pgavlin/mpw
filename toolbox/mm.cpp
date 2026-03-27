@@ -576,6 +576,53 @@ namespace MM
 			return SetMemError(0);
 		}
 
+		uint16_t HGetState(uint32_t handle, uint8_t &state)
+		{
+			const auto iter = HandleMap.find(handle);
+			if (iter == HandleMap.end()) return SetMemError(MacOS::memWZErr);
+			const auto &info = iter->second;
+			uint8_t flags = 0;
+			if (info.resource) flags |= (1 << 5);
+			if (info.purgeable) flags |= (1 << 6);
+			if (info.locked) flags |= (1 << 7);
+			state = flags;
+			return SetMemError(0);
+		}
+
+		uint16_t HSetState(uint32_t handle, uint8_t state)
+		{
+			auto iter = HandleMap.find(handle);
+			if (iter == HandleMap.end()) return SetMemError(MacOS::memWZErr);
+			auto &info = iter->second;
+			info.resource = (state & (1 << 5));
+			info.purgeable = (state & (1 << 6));
+			info.locked = (state & (1 << 7));
+			return SetMemError(0);
+		}
+
+		uint16_t HPurge(uint32_t handle)
+		{
+			auto iter = HandleMap.find(handle);
+			if (iter == HandleMap.end()) return SetMemError(MacOS::memWZErr);
+			iter->second.purgeable = true;
+			return SetMemError(0);
+		}
+
+		uint16_t HNoPurge(uint32_t handle)
+		{
+			auto iter = HandleMap.find(handle);
+			if (iter == HandleMap.end()) return SetMemError(MacOS::memWZErr);
+			iter->second.purgeable = false;
+			return SetMemError(0);
+		}
+
+		uint16_t MoveHHi(uint32_t handle)
+		{
+			auto iter = HandleMap.find(handle);
+			if (iter == HandleMap.end()) return SetMemError(MacOS::memWZErr);
+			return SetMemError(0);
+		}
+
 
 
 	}
@@ -754,25 +801,9 @@ namespace MM
 
 	uint16_t MoveHHi(uint16_t trap)
 	{
-		/*
-		 * on entry:
-		 * A0: Handle to move
-		 *
-		 * on exit:
-		 * D0: Result code.
-		 *
-		 */
-
 		uint32_t theHandle = cpuGetAReg(0);
-
-		 Log("%04x MoveHHi(%08x)\n", trap, theHandle);
-
-		// check if it's valid.
-
-		auto iter = HandleMap.find(theHandle);
-		if (iter == HandleMap.end()) return SetMemError(MacOS::memWZErr);
-
-		return SetMemError(0);
+		Log("%04x MoveHHi(%08x)\n", trap, theHandle);
+		return Native::MoveHHi(theHandle);
 	}
 
 
@@ -1174,125 +1205,34 @@ namespace MM
 
 	uint16_t HGetState(uint16_t trap)
 	{
-		/*
-		 * on entry:
-		 * A0 Handle
-		 *
-		 * on exit:
-		 * D0 flag byte
-		 *
-		 */
-
-		unsigned flags = 0;
 		uint32_t hh = cpuGetAReg(0);
-
 		Log("%04x HGetState(%08x)\n", trap, hh);
-
-
-		auto iter = HandleMap.find(hh);
-
-		if (iter == HandleMap.end()) return SetMemError(MacOS::memWZErr);
-
-		/*
-		 * flag bits:
-		 * 0-4: reserved
-		 * 5: is a resource
-		 * 6: set if purgeable
-		 * 7: set if locked
-		 */
-
-		const auto &info = iter->second;
-
-		// resource not yet supported...
-		// would need extra field and support in RM:: when
-		// creating.
-		// see HSetRBit, HClrRBit
-		if (info.resource) flags |= (1 << 5);
-		if (info.purgeable) flags |= (1 << 6);
-		if (info.locked) flags |= (1 << 7);
-
-		SetMemError(0);
-		return flags;
+		uint8_t state = 0;
+		uint16_t err = Native::HGetState(hh, state);
+		if (err) return err;
+		return state;
 	}
 
 	uint16_t HSetState(uint16_t trap)
 	{
-		/*
-		 * on entry:
-		 * A0 Handle
-		 * D0 flags
-		 *
-		 * on exit:
-		 * D0 flag byte
-		 *
-		 */
-
 		uint32_t hh = cpuGetAReg(0);
 		uint16_t flags = cpuGetDReg(0);
-
 		Log("%04x HSetState(%08x, %04x)\n", trap, hh, flags);
-
-		auto iter = HandleMap.find(hh);
-
-		if (iter == HandleMap.end()) return SetMemError(MacOS::memWZErr);
-
-		auto &info = iter->second;
-
-		info.resource = (flags & (1 << 5));
-		info.purgeable = (flags & (1 << 6));
-		info.locked = (flags & (1 << 7));
-
-
-		return SetMemError(0);
+		return Native::HSetState(hh, (uint8_t)flags);
 	}
 
 	uint16_t HPurge(uint16_t trap)
 	{
-		/*
-		 * on entry:
-		 * A0 Handle
-		 *
-		 * on exit:
-		 * D0 Result code
-		 *
-		 */
-
-
 		uint32_t hh = cpuGetAReg(0);
-
 		Log("%04x HPurge(%08x)\n", trap, hh);
-
-		auto iter = HandleMap.find(hh);
-
-		if (iter == HandleMap.end()) return SetMemError(MacOS::memWZErr);
-		iter->second.purgeable = true;
-
-		return SetMemError(0);
+		return Native::HPurge(hh);
 	}
-
 
 	uint16_t HNoPurge(uint16_t trap)
 	{
-		/*
-		 * on entry:
-		 * A0 Handle
-		 *
-		 * on exit:
-		 * D0 Result code
-		 *
-		 */
-
-
 		uint32_t hh = cpuGetAReg(0);
-
 		Log("%04x HNoPurge(%08x)\n", trap, hh);
-
-		auto iter = HandleMap.find(hh);
-
-		if (iter == HandleMap.end()) return SetMemError(MacOS::memWZErr);
-		iter->second.purgeable = false;
-
-		return SetMemError(0);
+		return Native::HNoPurge(hh);
 	}
 
 	uint16_t HLock(uint16_t trap)

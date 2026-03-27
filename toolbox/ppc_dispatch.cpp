@@ -575,6 +575,126 @@ static void wrap_SetEmulatorRegister() {
 	// no-op
 }
 
+// ================================================================
+// Phase 8: Additional InterfaceLib wrappers for PPC tools
+// ================================================================
+
+// -- Cursor (no-ops for CLI) --
+static void wrap_ShowCursor() { SetGPR(3, 0); }
+static void wrap_GetCursor() { SetGPR(3, 0); }
+static void wrap_SetCursor() { /* no-op */ }
+
+// -- Memory Manager extras --
+static void wrap_SetHandleSize() {
+	SetGPR(3, MM::Native::SetHandleSize(GetGPR(3), GetGPR(4)));
+}
+static void wrap_HGetState() {
+	uint8_t state = 0;
+	MM::Native::HGetState(GetGPR(3), state);
+	SetGPR(3, state);
+}
+static void wrap_HSetState() {
+	MM::Native::HSetState(GetGPR(3), (uint8_t)GetGPR(4));
+}
+static void wrap_HPurge() { MM::Native::HPurge(GetGPR(3)); }
+static void wrap_HNoPurge() { MM::Native::HNoPurge(GetGPR(3)); }
+static void wrap_MoveHHi() { MM::Native::MoveHHi(GetGPR(3)); }
+
+// -- Resource Manager extras --
+static void wrap_HomeResFile() {
+	SetGPR(3, (uint32_t)(int32_t)RM::Native::HomeResFile(GetGPR(3)));
+}
+static void wrap_GetResource() {
+	uint32_t h = 0;
+	RM::Native::GetResource(GetGPR(3), (int16_t)GetGPR(4), h);
+	SetGPR(3, h);
+}
+static void wrap_Get1Resource() {
+	uint32_t h = 0;
+	RM::Native::Get1Resource(GetGPR(3), (int16_t)GetGPR(4), h);
+	SetGPR(3, h);
+}
+static void wrap_GetResAttrs() {
+	SetGPR(3, RM::Native::GetResAttrs(GetGPR(3)));
+}
+static void wrap_GetResInfo() {
+	int16_t id = 0;
+	uint32_t type = 0;
+	std::string name;
+	RM::Native::GetResInfo(GetGPR(3), &id, &type, &name);
+	if (GetGPR(4)) memoryWriteWord(id, GetGPR(4));
+	if (GetGPR(5)) memoryWriteLong(type, GetGPR(5));
+	if (GetGPR(6)) ToolBox::WritePString(GetGPR(6), name);
+}
+static void wrap_GetResourceSizeOnDisk() {
+	SetGPR(3, (uint32_t)RM::Native::GetResourceSizeOnDisk(GetGPR(3)));
+}
+static void wrap_SetResLoad() {
+	RM::Native::SetResLoad(GetGPR(3) != 0);
+}
+static void wrap_UseResFile() {
+	RM::Native::UseResFile((int16_t)GetGPR(3));
+}
+static void wrap_OpenResFile() {
+	std::string name = ToolBox::ReadPString(GetGPR(3), false);
+	SetGPR(3, (uint32_t)(int32_t)RM::Native::OpenResFile(name));
+}
+static void wrap_CloseResFile() {
+	RM::Native::CloseResFile((int16_t)GetGPR(3));
+}
+static void wrap_UpdateResFile() {
+	RM::Native::UpdateResFile((int16_t)GetGPR(3));
+}
+static void wrap_AddResource() {
+	std::string name = ToolBox::ReadPString(GetGPR(6), false);
+	RM::Native::AddResource(GetGPR(3), GetGPR(4), (int16_t)GetGPR(5), name);
+}
+static void wrap_ChangedResource() {
+	RM::Native::ChangedResource(GetGPR(3));
+}
+static void wrap_RemoveResource() {
+	RM::Native::RemoveResource(GetGPR(3));
+}
+static void wrap_ReadPartialResource() {
+	RM::Native::ReadPartialResource(GetGPR(3), GetGPR(4), GetGPR(5), GetGPR(6));
+}
+
+// -- File Manager extras --
+static void wrap_PBReadSync() {
+	SetGPR(3, (uint32_t)(int16_t)OS::Native::Read(GetGPR(3)));
+}
+static void wrap_PBHGetFInfoSync() {
+	SetGPR(3, (uint32_t)(int16_t)OS::Native::GetFileInfo(GetGPR(3), 0xA20C));
+}
+
+// -- Low Memory Globals --
+static void wrap_LMGetBootDrive() {
+	SetGPR(3, (uint32_t)(int16_t)memoryReadWord(0x0210));
+}
+static void wrap_LMGetCurrentA5() {
+	SetGPR(3, memoryReadLong(0x0904));
+}
+
+// -- Misc --
+static void wrap_FindFolder() {
+	// We don't support the Folder Manager — return fnfErr
+	SetGPR(3, (uint32_t)(int16_t)-43);
+}
+static void wrap_numtostring() {
+	int32_t theNum = (int32_t)GetGPR(3);
+	uint32_t theString = GetGPR(4);
+	std::string s = std::to_string(theNum);
+	ToolBox::WritePString(theString, s);
+}
+static void wrap_createresfile() {
+	std::string name = ToolBox::ReadCString(GetGPR(3));
+	RM::Native::CreateResFile(name);
+}
+static void wrap_openresfile() {
+	std::string name = ToolBox::ReadCString(GetGPR(3));
+	SetGPR(3, (uint32_t)(int32_t)RM::Native::OpenResFile(name));
+}
+
 } // anonymous namespace
 
 // ================================================================
@@ -728,6 +848,54 @@ void RegisterStdCLibImports() {
 	// -- PrivateInterfaceLib (2) --
 	reg("PrivateInterfaceLib", "GetEmulatorRegister", wrap_GetEmulatorRegister);
 	reg("PrivateInterfaceLib", "SetEmulatorRegister", wrap_SetEmulatorRegister);
+
+	// ================================================================
+	// Phase 8: Additional InterfaceLib wrappers for PPC tools
+	// ================================================================
+
+	// -- Cursor (no-ops) --
+	reg("InterfaceLib", "ShowCursor", wrap_ShowCursor);
+	reg("InterfaceLib", "GetCursor", wrap_GetCursor);
+	reg("InterfaceLib", "SetCursor", wrap_SetCursor);
+
+	// -- Memory Manager extras --
+	reg("InterfaceLib", "SetHandleSize", wrap_SetHandleSize);
+	reg("InterfaceLib", "HGetState", wrap_HGetState);
+	reg("InterfaceLib", "HSetState", wrap_HSetState);
+	reg("InterfaceLib", "HPurge", wrap_HPurge);
+	reg("InterfaceLib", "HNoPurge", wrap_HNoPurge);
+	reg("InterfaceLib", "MoveHHi", wrap_MoveHHi);
+
+	// -- Resource Manager extras --
+	reg("InterfaceLib", "HomeResFile", wrap_HomeResFile);
+	reg("InterfaceLib", "GetResource", wrap_GetResource);
+	reg("InterfaceLib", "Get1Resource", wrap_Get1Resource);
+	reg("InterfaceLib", "GetResAttrs", wrap_GetResAttrs);
+	reg("InterfaceLib", "GetResInfo", wrap_GetResInfo);
+	reg("InterfaceLib", "GetResourceSizeOnDisk", wrap_GetResourceSizeOnDisk);
+	reg("InterfaceLib", "SetResLoad", wrap_SetResLoad);
+	reg("InterfaceLib", "UseResFile", wrap_UseResFile);
+	reg("InterfaceLib", "OpenResFile", wrap_OpenResFile);
+	reg("InterfaceLib", "CloseResFile", wrap_CloseResFile);
+	reg("InterfaceLib", "UpdateResFile", wrap_UpdateResFile);
+	reg("InterfaceLib", "AddResource", wrap_AddResource);
+	reg("InterfaceLib", "ChangedResource", wrap_ChangedResource);
+	reg("InterfaceLib", "RemoveResource", wrap_RemoveResource);
+	reg("InterfaceLib", "ReadPartialResource", wrap_ReadPartialResource);
+
+	// -- File Manager extras --
+	reg("InterfaceLib", "PBReadSync", wrap_PBReadSync);
+	reg("InterfaceLib", "PBHGetFInfoSync", wrap_PBHGetFInfoSync);
+
+	// -- Low Memory Globals --
+	reg("InterfaceLib", "LMGetBootDrive", wrap_LMGetBootDrive);
+	reg("InterfaceLib", "LMGetCurrentA5", wrap_LMGetCurrentA5);
+
+	// -- Misc --
+	reg("InterfaceLib", "FindFolder", wrap_FindFolder);
+	reg("InterfaceLib", "numtostring", wrap_numtostring);
+	reg("InterfaceLib", "createresfile", wrap_createresfile);
+	reg("InterfaceLib", "openresfile", wrap_openresfile);
 }
 
 // ================================================================

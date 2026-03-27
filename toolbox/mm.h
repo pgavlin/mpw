@@ -32,6 +32,12 @@ namespace MM
 
 		uint16_t HLock(uint32_t handle);
 		uint16_t HUnlock(uint32_t handle);
+
+		uint16_t HGetState(uint32_t handle, uint8_t &state);
+		uint16_t HSetState(uint32_t handle, uint8_t state);
+		uint16_t HPurge(uint32_t handle);
+		uint16_t HNoPurge(uint32_t handle);
+		uint16_t MoveHHi(uint32_t handle);
 	}
 
 	bool Init(uint8_t *memory, uint32_t memorySize, uint32_t globals, uint32_t stack);

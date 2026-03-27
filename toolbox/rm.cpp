@@ -405,6 +405,34 @@ namespace RM
 		{
 			return memoryReadWord(MacOS::ResErr);
 		}
+
+		uint16_t Get1Resource(uint32_t type, uint16_t id, uint32_t &theHandle)
+		{
+			theHandle = 0;
+			auto *of = currentFile();
+			if (!of) return SetResError(MacOS::resNotFound);
+
+			const rsrc::ResourceEntry *entry = of->file->findResource(type, (int16_t)id);
+			if (!entry) return SetResError(MacOS::resNotFound);
+
+			return LoadResourceFromEntry(entry, of->file.get(), of->refNum, theHandle);
+		}
+
+		// Native::CreateResFile defined below (needs internal helper)
+
+		uint16_t ReadPartialResource(uint32_t theResource, uint32_t offset, uint32_t buffer, uint32_t count)
+		{
+			auto info = MM::GetHandleInfo(theResource);
+			if (info.error()) return SetResError(MacOS::resNotFound);
+
+			if (offset + count > info->size)
+				return SetResError(MacOS::paramErr);
+
+			uint8_t *src = memoryPointer(info->address + offset);
+			uint8_t *dst = memoryPointer(buffer);
+			std::memcpy(dst, src, count);
+			return SetResError(0);
+		}
 	}
 
 	uint16_t CloseResFile(uint16_t trap)
@@ -547,18 +575,8 @@ namespace RM
 
 		Log("%04x Get1Resource(%08x ('%s'), %04x)\n", trap, theType, TypeToString(theType).c_str(), theID);
 
-
 		uint32_t resourceHandle = 0;
-		uint16_t d0 = MacOS::resNotFound;
-
-		auto *of = currentFile();
-		if (of) {
-			const rsrc::ResourceEntry *entry = of->file->findResource(theType, (int16_t)theID);
-			if (entry) {
-				d0 = Native::LoadResourceFromEntry(entry, of->file.get(), of->refNum, resourceHandle);
-			}
-		}
-
+		uint16_t d0 = Native::Get1Resource(theType, theID, resourceHandle);
 
 		ToolReturn<4>(sp, resourceHandle);
 		return d0;
@@ -661,6 +679,13 @@ namespace RM
 			return MacOS::ioErr;
 
 		return {};
+	}
+
+	// Native::CreateResFile is defined here because it needs the internal
+	// CreateResFile(const std::string&) helper defined above.
+	uint16_t Native::CreateResFile(const std::string &name) {
+		auto rv = RM::CreateResFile(name);
+		return SetResError(rv.error());
 	}
 
 	uint16_t CreateResFile(uint16_t trap)

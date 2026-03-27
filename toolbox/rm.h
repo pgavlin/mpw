@@ -27,6 +27,9 @@ namespace RM
 		uint16_t ChangedResource(uint32_t theResource);
 		uint16_t RemoveResource(uint32_t theResource);
 		uint16_t ResError();
+		uint16_t Get1Resource(uint32_t type, uint16_t id, uint32_t &theHandle);
+		uint16_t CreateResFile(const std::string &name);
+		uint16_t ReadPartialResource(uint32_t theResource, uint32_t offset, uint32_t buffer, uint32_t count);
 	}
 
 	uint16_t CloseResFile(uint16_t trap);
