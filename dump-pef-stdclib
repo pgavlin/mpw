@@ -9781,76 +9781,100 @@ resource 'cfrg' (0) {
 097B0 09730   X      7C0803A6               mtlr      r0                        ; LR = 8
 097B4 09734          BBC1FFF8               lmw       r30,-0x0008(SP)
 097B8 09738   X      4E800020               blr
-097BC 0973C   X      7C0802A6               mflr      r0                        ; LR = 8
+; ===========================================================================
+; _getIOPort — resolve fd index to ioEntry pointer
+;
+; Exported as _getIOPort. Called from _coWrite, _coIoctl (FIODUPFD), etc.
+; Args: r3 = pointer to a word containing the fd index
+;       (e.g., &cookie_data[0] from FIODUPFD, &cookie_data[4] from _coWrite)
+;
+; Reads *r3 as an fd index, validates it against _IntEnv+0x1A (fd table size),
+; then computes ioTable[fdIndex] = *(_IntEnv+0x1C) + fdIndex * 20.
+;
+; Returns: pointer to the ioEntry (in r9), or 0 if invalid.
+; The ioEntry has: flags(2), error(2), device(4), cookie(4), count(4), buffer(4)
+; ===========================================================================
+097BC 0973C   X      7C0802A6               mflr      r0
 097C0 09740          BF81FFF0               stmw      r28,-0x0010(SP)
 097C4 09744          90010008               stw       r0,0x0008(SP)
-097C8 09748          9421FFB0               stwu      SP,-0x0050(SP)
-097CC 0974C          83E2FFFC               lwz       r31,-0x0004(RTOC)
-097D0 09750   X      7C7C1B78               mr        r28,r3
-097D4 09754          A91F001A               lha       r8,0x001A(r31)
+097C8 09748          9421FFB0               stwu      SP,-0x0050(SP)            ; frame = 80 bytes
+097CC 0974C          83E2FFFC               lwz       r31,-0x0004(RTOC)         ; r31 = &_IntEnv (RTOC-4)
+097D0 09750   X      7C7C1B78               mr        r28,r3                    ; r28 = ptr to fd index word
+; --- Read fd table size and validate ---
+097D4 09754          A91F001A               lha       r8,0x001A(r31)            ; r8 = _IntEnv+0x1A = fd table size (bytes)
 097D8 09758   X      2C080000               cmpwi     r8,0
-097DC 0975C   X      4082000C               bne       $+0x000C                  ; 0x00009768
-097E0 09760          4BFFFEDD               bl        $-0x0124                  ; 0x0000963C
-097E4 09764          A91F001A               lha       r8,0x001A(r31)
-097E8 09768          813C0000               lwz       r9,0x0000(r28)
-097EC 0976C   X      38600014               li        r3,20
-097F0 09770          7CE81B96               divwu     r7,r8,r3
-097F4 09774   X      2F090000               cmpwi     cr6,r9,0
-097F8 09778   X      3BA00014               li        r29,20
-097FC 0977C   X      3BC7FFFF               subi      r30,r7,1
-09800 09780   X      41980034               blt       cr6,$+0x0034              ; 0x000097B4
-09804 09784   X      7C09F000               cmpw      r9,r30
-09808 09788   X      40810060               ble       $+0x0060                  ; 0x000097E8
-0980C 0978C   X      38600009               li        r3,9
+097DC 0975C   X      4082000C               bne       $+0x000C                  ; if non-zero → 0x9768
+; fd table size is 0: call init function to set it up
+097E0 09760          4BFFFEDD               bl        $-0x0124                  ; call IO table init (0x963C)
+097E4 09764          A91F001A               lha       r8,0x001A(r31)            ; reload fd table size
+; --- Compute bounds ---
+097E8 09768          813C0000               lwz       r9,0x0000(r28)            ; r9 = *r28 = fd index
+097EC 0976C   X      38600014               li        r3,20                     ; 20 = sizeof(ioEntry)
+097F0 09770          7CE81B96               divwu     r7,r8,r3                  ; r7 = fdTableSize / 20 = num entries
+097F4 09774   X      2F090000               cmpwi     cr6,r9,0                  ; cr6: is fd index negative?
+097F8 09778   X      3BA00014               li        r29,20                    ; r29 = 20 (ioEntry size, for later)
+097FC 0977C   X      3BC7FFFF               subi      r30,r7,1                  ; r30 = max valid fd index
+; --- Validate fd index ---
+09800 09780   X      41980034               blt       cr6,$+0x0034              ; if fd < 0 → negative fd path (0x97B4)
+09804 09784   X      7C09F000               cmpw      r9,r30                    ; fd > max?
+09808 09788   X      40810060               ble       $+0x0060                  ; if fd <= max → valid (0x97E8)
+; --- fd index too large: return error ---
+0980C 0978C   X      38600009               li        r3,9                      ; EBADF
 09810 09790   X      38800000               li        r4,0
-09814 09794          48007339               bl        $+0x7338                  ; 0x00010ACC
+09814 09794          48007339               bl        $+0x7338                  ; call errno setter (0x10ACC)
 09818 09798          80410014               lwz       RTOC,0x0014(SP)
-0981C 0979C   X      38600000               li        r3,0
+0981C 0979C   X      38600000               li        r3,0                      ; return NULL
 09820 097A0          38210050               addi      SP,SP,80
 09824 097A4          80010008               lwz       r0,0x0008(SP)
-09828 097A8   X      7C0803A6               mtlr      r0                        ; LR = 8
+09828 097A8   X      7C0803A6               mtlr      r0
 0982C 097AC          BB81FFF0               lmw       r28,-0x0010(SP)
 09830 097B0   X      4E800020               blr
-09834 097B4          2069FFFF               subfic    r3,r9,-1
+; --- Negative fd index: convert to positive offset from end ---
+09834 097B4          2069FFFF               subfic    r3,r9,-1                  ; r3 = -1 - fd (negate-1)
 09838 097B8   X      7C03F000               cmpw      r3,r30
-0983C 097BC   X      4081002C               ble       $+0x002C                  ; 0x000097E8
-09840 097C0   X      38600016               li        r3,22
+0983C 097BC   X      4081002C               ble       $+0x002C                  ; if valid → 0x97E8
+; --- Invalid negative fd: return EINVAL ---
+09840 097C0   X      38600016               li        r3,22                     ; EINVAL
 09844 097C4   X      38800000               li        r4,0
-09848 097C8          48007305               bl        $+0x7304                  ; 0x00010ACC
+09848 097C8          48007305               bl        $+0x7304                  ; call errno setter
 0984C 097CC          80410014               lwz       RTOC,0x0014(SP)
-09850 097D0   X      38600000               li        r3,0
+09850 097D0   X      38600000               li        r3,0                      ; return NULL
 09854 097D4          38210050               addi      SP,SP,80
 09858 097D8          80010008               lwz       r0,0x0008(SP)
-0985C 097DC   X      7C0803A6               mtlr      r0                        ; LR = 8
+0985C 097DC   X      7C0803A6               mtlr      r0
 09860 097E0          BB81FFF0               lmw       r28,-0x0010(SP)
 09864 097E4   X      4E800020               blr
-09868 097E8          807F001C               lwz       r3,0x001C(r31)
-0986C 097EC   X      41980030               blt       cr6,$+0x0030              ; 0x0000981C
-09870 097F0          1C890014               mulli     r4,r9,20
-09874 097F4          7CA322AE               lhax      r5,r3,r4
-09878 097F8   X      2C050000               cmpwi     r5,0
-0987C 097FC          7D232214               add       r9,r3,r4
-09880 09800   X      408200D8               bne       $+0x00D8                  ; 0x000098D8
-09884 09804   X      38600009               li        r3,9
+; --- Valid positive fd: look up ioEntry ---
+09868 097E8          807F001C               lwz       r3,0x001C(r31)            ; r3 = _IntEnv+0x1C = IO table base
+0986C 097EC   X      41980030               blt       cr6,$+0x0030              ; if negative fd → scan path (0x981C)
+; Positive fd: direct index
+09870 097F0          1C890014               mulli     r4,r9,20                  ; r4 = fd * 20 (byte offset)
+09874 097F4          7CA322AE               lhax      r5,r3,r4                  ; r5 = ioTable[fd].flags (halfword)
+09878 097F8   X      2C050000               cmpwi     r5,0                      ; flags == 0 → fd not open
+0987C 097FC          7D232214               add       r9,r3,r4                  ; r9 = &ioTable[fd] (ioEntry ptr)
+09880 09800   X      408200D8               bne       $+0x00D8                  ; if open → return r9 (0x98D8)
+; --- fd not open: set EBADF, return NULL ---
+09884 09804   X      38600009               li        r3,9                      ; EBADF
 09888 09808   X      38800000               li        r4,0
-0988C 0980C          480072C1               bl        $+0x72C0                  ; 0x00010ACC
+0988C 0980C          480072C1               bl        $+0x72C0                  ; call errno setter
 09890 09810          80410014               lwz       RTOC,0x0014(SP)
-09894 09814   X      39200000               li        r9,0
-09898 09818          480000C0               b         $+0x00C0                  ; 0x000098D8
-0989C 0981C          1D470014               mulli     r10,r7,20
-098A0 09820          20C9FFFF               subfic    r6,r9,-1
-098A4 09824          7D635214               add       r11,r3,r10
-098A8 09828          1C860014               mulli     r4,r6,20
-098AC 0982C   X      38ABFFEC               subi      r5,r11,20
-098B0 09830          7D241A14               add       r9,r4,r3
+09894 09814   X      39200000               li        r9,0                      ; r9 = NULL
+09898 09818          480000C0               b         $+0x00C0                  ; → return (0x98D8)
+; --- Negative fd: scan IO table for matching fd ---
+0989C 0981C          1D470014               mulli     r10,r7,20                 ; r10 = numEntries * 20 (table end)
+098A0 09820          20C9FFFF               subfic    r6,r9,-1                  ; r6 = -1 - fd (positive scan count)
+098A4 09824          7D635214               add       r11,r3,r10                ; r11 = ioTable + tableSize (past end)
+098A8 09828          1C860014               mulli     r4,r6,20                  ; r4 = scanCount * 20
+098AC 0982C   X      38ABFFEC               subi      r5,r11,20                ; r5 = last valid entry
+098B0 09830          7D241A14               add       r9,r4,r3                  ; r9 = start scanning from offset
 098B4 09834   X      7C092840               cmplw     r9,r5
-098B8 09838   X      41810034               bgt       $+0x0034                  ; 0x0000986C
+098B8 09838   X      41810034               bgt       $+0x0034                  ; if past end → error (0x986C)
 098BC 0983C   X      7C863850               sub       r4,r7,r6
 098C0 09840   X      3929FFEC               subi      r9,r9,20
 098C4 09844          1C840014               mulli     r4,r4,20
 098C8 09848          7D44EBD6               divw      r10,r4,r29
-098CC 0984C   X      7D4903A6               mtctr     r10                       ; CTR = 9
-098D0 09850          48000008               b         $+0x0008                  ; 0x00009858
+098CC 0984C   X      7D4903A6               mtctr     r10                       ; CTR = loop count
+098D0 09850          48000008               b         $+0x0008                  ; → scan loop (0x9858)
 098D4 09854   X      41820018               beq       $+0x0018                  ; 0x0000986C
 098D8 09858          AC890014               lhau      r4,0x0014(r9)
 098DC 0985C   X      2C040000               cmpwi     r4,0
