@@ -8,19 +8,26 @@ The MPW emulator can run PowerPC MPW tools alongside the existing 68K support. P
 # Build
 mkdir build && cd build && cmake .. && make
 
-# Run a PPC tool
-./bin/mpw --ppc tools/Hello
+# Run a PPC tool (auto-detected from PEF data fork)
+./bin/mpw tools/Hello
 
 # Run with tracing
-./bin/mpw --ppc --trace-toolbox tools/Hello    # stub dispatch
-./bin/mpw --ppc --trace-mpw tools/Hello        # device I/O
-./bin/mpw --ppc --trace-cpu tools/Hello        # every instruction
+./bin/mpw --trace-toolbox tools/Hello    # stub dispatch
+./bin/mpw --trace-mpw tools/Hello        # device I/O
+./bin/mpw --trace-cpu tools/Hello        # every instruction
 
 # Interactive debugger
-./bin/mpw --ppc --debug tools/Hello
+./bin/mpw --debug tools/Hello
+
+# Force PPC or 68K mode (for fat binaries)
+./bin/mpw --ppc tools/Hello
+./bin/mpw --68k DumpPEF tools/Hello
+
+# Disassemble a PPC binary
+./bin/disasm tools/Hello
 ```
 
-68K tools work as before (the `--ppc` flag is required for PPC).
+The emulator auto-detects PPC vs 68K: if the tool has CODE resources in its resource fork, 68K is used. Otherwise, if the data fork starts with PEF magic (`Joy!peff`), PPC is used. Use `--ppc` or `--68k` to override for fat binaries.
 
 ## Architecture
 
@@ -96,6 +103,11 @@ mkdir build && cd build && cmake .. && make
 | `mpw/mpw_close.cpp` | File close |
 | `mpw/mpw_ioctl.cpp` | ioctl: seek, dup, interactive, bufsize, refnum, seteof |
 
+### Disassembler
+| File | Description |
+|------|-------------|
+| `bin/disasm.cpp` | Auto-detects PEF vs 68K; PPC disassembly via Capstone, 68K via CpuModule |
+
 ### Tools
 | File | Description |
 |------|-------------|
@@ -113,15 +125,17 @@ mkdir build && cd build && cmake .. && make
 ## What Works
 
 ### Fully Working
+- Auto-detection of PPC (PEF) vs 68K (CODE) binaries
 - PPC CPU execution (Unicorn 603e, MSR[FP]=1 for floating-point)
 - PEF loading with pidata decompression and full relocation engine
 - On-demand shared library loading (StdCLib, and any others the tool imports)
 - StdCLib init/exit lifecycle (setjmp/longjmp exit mechanism)
-- Console I/O (stdin/stdout/stderr) with CR→LF conversion
-- File I/O (open/read/write/close/seek) via stdio and low-level APIs
+- Console I/O (stdin/stdout/stderr) via ECON device with CR→LF conversion
+- File I/O (open/read/write/close/seek) via FSYS device, shared with 68K path
 - Handle-based cookies for IO table entries
 - 95 InterfaceLib + 4 MathLib + 2 PrivateInterfaceLib stubs
 - Interactive PPC debugger (step, break, registers, memory, disassembly)
+- PPC disassembly in `disasm` tool (auto-detects PEF, uses Capstone)
 - Exit code capture via MPW::ExitStatus()
 - CallUniversalProc PPC trampoline (dispatches PPC TVectors and 68K descriptors)
 
@@ -134,8 +148,7 @@ mkdir build && cd build && cmake .. && make
 
 ### Known Limitations
 - **16 MB address space**: Tools + libraries + data must fit in 16 MB. Increase with `--memory`.
-- **No resource fork I/O via stdio**: `fopen` with `O_RSRC` opens the native resource fork, but DumpPEF's PEF parsing of resource fork data has issues.
-- **DumpPEF crash**: The PPC DumpPEF crashes with an unmapped memory read during PEF section string table parsing. The I/O layer works correctly — this is a tool-specific parsing issue, possibly related to buffer size or data interpretation.
+- **DumpPEF (PPC) crash**: The PPC DumpPEF crashes with an unmapped memory read during PEF section string table parsing. File I/O works correctly — this appears to be a tool-specific parsing issue where DumpPEF walks past the end of a data structure in its own BSS section.
 - **Catch-all stub**: Any unimplemented InterfaceLib function prints a fatal error with register state and stops execution. Add new stubs to `ppc_dispatch.cpp` as needed.
 
 ## Building PPC Test Tools
