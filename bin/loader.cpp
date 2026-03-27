@@ -569,8 +569,11 @@ static void PPCCallFunction(uint32_t tvecAddr) {
 	uint32_t codeAddr = memoryReadLong(tvecAddr);
 	uint32_t toc = memoryReadLong(tvecAddr + 4);
 
-	// Set up PPC stack pointer at top of memory, below 68K stack
-	uint32_t ppcStackTop = Flags.memorySize - Flags.stackSize - 64;
+	// Set up PPC stack pointer at top of stack area.
+	// The stack area is the last stackSize bytes of memory.
+	// mplite's aCtrl array sits just below the stack area, so we must
+	// NOT place SP below (memorySize - stackSize) or we'll corrupt it.
+	uint32_t ppcStackTop = Flags.memorySize - 64;
 	ppcStackTop &= ~0xF; // 16-byte aligned
 	PPC::SetGPR(1, ppcStackTop);
 	PPC::SetGPR(2, toc);
@@ -679,7 +682,7 @@ static void RunPPC(int argc, char **argv, const std::string &command) {
 			// Set up PPC state but don't execute — let the debugger control it
 			uint32_t codeAddr = memoryReadLong(toolResult.entryPoint);
 			uint32_t toc = memoryReadLong(toolResult.entryPoint + 4);
-			uint32_t ppcStackTop = Flags.memorySize - Flags.stackSize - 64;
+			uint32_t ppcStackTop = Flags.memorySize - 64;
 			ppcStackTop &= ~0xF;
 			PPC::SetGPR(1, ppcStackTop);
 			PPC::SetGPR(2, toc);

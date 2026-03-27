@@ -808,7 +808,6 @@ static void econ_close() {
 }
 
 static void econ_ioctl() {
-	fprintf(stderr, "ECON_IOCTL ENTERED\n");
 	uint32_t ioEntry = GetGPR(3);
 	uint32_t cmd = GetGPR(4);
 	uint32_t arg = GetGPR(5);
@@ -826,7 +825,8 @@ static void econ_ioctl() {
 	case 0x6601: { // FIODUPFD
 		uint32_t cookie = memoryReadLong(ioEntry + 8);
 		int fd = cookieToFd(cookie);
-		fprintf(stderr, "  ECON FIODUPFD: cookie=0x%08X fd=%d\n", cookie, fd);
+		if (MPW::Trace)
+			fprintf(stderr, "  ECON FIODUPFD: cookie=0x%08X fd=%d\n", cookie, fd);
 		if (fd >= 0) cookieFdMap[cookie] = fd;
 		SetGPR(3, 0);
 		break;
@@ -858,31 +858,18 @@ static void econ_faccess() {
 }
 
 // Allocate a cookie Handle for a stdio fd.
-// A Handle is a pointer to a master pointer, which points to the data.
-// We simulate a Handle using two NewPtr allocations:
-//   - One for the cookie data (0x10 bytes)
-//   - One for the master pointer (4 bytes, points to cookie data)
-// The "Handle" is the address of the master pointer block.
 static uint32_t allocateCookieHandle(int fdIndex) {
-	// Allocate cookie data block
+	// Allocate cookie data
 	uint32_t cookieData = 0;
-	MM::Native::NewPtr(0x10, true, cookieData);
-	if (!cookieData) return 0;
+	uint32_t cookieHandle = 0;
+	uint16_t error = MM::Native::NewHandle(0x10, true, cookieHandle, cookieData);
+	if (error) return 0;
 
 	memoryWriteLong(fdIndex, cookieData + 0x00);  // fd index for FIODUPFD
 	memoryWriteLong(fdIndex, cookieData + 0x04);  // fd index for _coWrite
 	memoryWriteByte(0, cookieData + 0x0C);         // not connected
 
-	// Allocate master pointer block (simulates Handle)
-	// Use 16 bytes minimum to avoid mplite minimum block size issues
-	uint32_t masterPtrBlock = 0;
-	MM::Native::NewPtr(16, true, masterPtrBlock);
-	if (!masterPtrBlock) return 0;
-
-	// Master pointer points to cookie data
-	memoryWriteLong(cookieData, masterPtrBlock);
-
-	return masterPtrBlock;
+	return cookieHandle;
 }
 
 void PatchDeviceTable(uint32_t mpgmInfoAddr) {
