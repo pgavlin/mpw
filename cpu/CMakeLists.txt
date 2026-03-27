@@ -1,2 +1,2 @@
-add_subdirectory(m68k_uc)
+add_subdirectory(m68k)
 add_subdirectory(ppc)
