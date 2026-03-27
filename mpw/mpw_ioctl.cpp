@@ -58,7 +58,7 @@ using MacOS::macos_error_from_errno;
 namespace MPW
 {
 
-	uint32_t ftrap_dup(uint32_t parm, uint32_t arg)
+	uint32_t ftrap_dup(int fd, uint32_t parm, uint32_t arg)
 	{
 		uint32_t d0;
 		MPWFile f;
@@ -66,13 +66,11 @@ namespace MPW
 		f.flags = memoryReadWord(parm);
 		f.error = memoryReadWord(parm + 2);
 		f.device = memoryReadLong(parm + 4);
-		f.cookie = memoryReadLong(parm + 8);
 		f.count = memoryReadLong(parm + 12);
 		f.buffer = memoryReadLong(parm + 16);
 
 		f.error = 0;
 
-		int fd = f.cookie;
 
 		Log("     dup(%02x)\n", fd);
 
@@ -112,7 +110,7 @@ namespace MPW
 		return d0;
 	}
 
-	uint32_t ftrap_bufsize(uint32_t parm, uint32_t arg)
+	uint32_t ftrap_bufsize(int fd, uint32_t parm, uint32_t arg)
 	{
 		// should return the preferred buffsize in *arg
 		// an error will use the default size (0x400 bytes).
@@ -122,13 +120,11 @@ namespace MPW
 		f.flags = memoryReadWord(parm);
 		f.error = memoryReadWord(parm + 2);
 		f.device = memoryReadLong(parm + 4);
-		f.cookie = memoryReadLong(parm + 8);
 		f.count = memoryReadLong(parm + 12);
 		f.buffer = memoryReadLong(parm + 16);
 
 		f.error = 0;
 
-		int fd = f.cookie;
 
 		Log("     bufsize(%02x)\n", fd);
 
@@ -137,7 +133,7 @@ namespace MPW
 	}
 
 
-	uint32_t ftrap_interactive(uint32_t parm, uint32_t arg)
+	uint32_t ftrap_interactive(int fd, uint32_t parm, uint32_t arg)
 	{
 		// return 0 if interactive, an error if
 		// non-interactive.
@@ -149,7 +145,6 @@ namespace MPW
 		f.flags = memoryReadWord(parm);
 		f.error = memoryReadWord(parm + 2);
 		f.device = memoryReadLong(parm + 4);
-		f.cookie = memoryReadLong(parm + 8);
 		f.count = memoryReadLong(parm + 12);
 		f.buffer = memoryReadLong(parm + 16);
 
@@ -159,7 +154,6 @@ namespace MPW
 
 		f.error = 0;
 
-		int fd = f.cookie;
 
 		Log("     interactive(%02x)\n", fd);
 
@@ -199,7 +193,7 @@ namespace MPW
 		return d0;
 	}
 
-	uint32_t ftrap_fname(uint32_t parm, uint32_t arg)
+	uint32_t ftrap_fname(int fd, uint32_t parm, uint32_t arg)
 	{
 		// return file name.
 		// AsmIIgs uses this...
@@ -209,13 +203,11 @@ namespace MPW
 		f.flags = memoryReadWord(parm);
 		f.error = memoryReadWord(parm + 2);
 		f.device = memoryReadLong(parm + 4);
-		f.cookie = memoryReadLong(parm + 8);
 		f.count = memoryReadLong(parm + 12);
 		f.buffer = memoryReadLong(parm + 16);
 
 		f.error = 0;
 
-		int fd = f.cookie;
 
 		Log("     fname(%02x)\n", fd);
 
@@ -223,7 +215,7 @@ namespace MPW
 		return kEINVAL;
 	}
 
-	uint32_t ftrap_refnum(uint32_t parm, uint32_t arg)
+	uint32_t ftrap_refnum(int fd, uint32_t parm, uint32_t arg)
 	{
 		// returns the refnum in *arg
 		uint32_t d0;
@@ -233,13 +225,11 @@ namespace MPW
 		f.flags = memoryReadWord(parm);
 		f.error = memoryReadWord(parm + 2);
 		f.device = memoryReadLong(parm + 4);
-		f.cookie = memoryReadLong(parm + 8);
 		f.count = memoryReadLong(parm + 12);
 		f.buffer = memoryReadLong(parm + 16);
 
 		f.error = 0;
 
-		int fd = f.cookie;
 
 		Log("     refnum(%02x)\n", fd);
 
@@ -271,7 +261,7 @@ namespace MPW
 
 
 
-	uint32_t ftrap_lseek(uint32_t parm, uint32_t arg)
+	uint32_t ftrap_lseek(int fd, uint32_t parm, uint32_t arg)
 	{
 		MPWFile f;
 		uint32_t d0;
@@ -283,12 +273,10 @@ namespace MPW
 		f.flags = memoryReadWord(parm);
 		f.error = memoryReadWord(parm + 2);
 		f.device = memoryReadLong(parm + 4);
-		f.cookie = memoryReadLong(parm + 8);
 		f.count = memoryReadLong(parm + 12);
 		f.buffer = memoryReadLong(parm + 16);
 
 
-		int fd = f.cookie;
 
 		/*
 		 * LinkIIgs does a seek on stdin.  If it doesn't cause an
@@ -351,7 +339,7 @@ namespace MPW
 	}
 
 
-	uint32_t ftrap_seteof(uint32_t parm, uint32_t arg)
+	uint32_t ftrap_seteof(int fd, uint32_t parm, uint32_t arg)
 	{
 
 		uint32_t d0;
@@ -361,13 +349,11 @@ namespace MPW
 		f.flags = memoryReadWord(parm);
 		f.error = memoryReadWord(parm + 2);
 		f.device = memoryReadLong(parm + 4);
-		f.cookie = memoryReadLong(parm + 8);
 		f.count = memoryReadLong(parm + 12);
 		f.buffer = memoryReadLong(parm + 16);
 
 		f.error = 0;
 
-		int fd = f.cookie;
 
 		Log("     seteof(%02x, %08x)\n", fd, arg);
 
@@ -390,38 +376,40 @@ namespace MPW
 
 
 	namespace Native {
-		uint32_t IOCtl(uint32_t parm, uint32_t cmd, uint32_t arg)
+		uint32_t IOCtl(uint32_t parm, uint32_t cmd, uint32_t arg, int fd)
 		{
+			if (fd < 0) fd = memoryReadLong(parm + 8);
+
 			uint32_t d0;
 
 			switch (cmd)
 			{
 				case kFIOLSEEK:
-					d0 = ftrap_lseek(parm, arg);
+					d0 = ftrap_lseek(fd, parm, arg);
 					break;
 
 				case kFIODUPFD:
-					d0 = ftrap_dup(parm, arg);
+					d0 = ftrap_dup(fd, parm, arg);
 					break;
 
 				case kFIOBUFSIZE:
-					d0 = ftrap_bufsize(parm, arg);
+					d0 = ftrap_bufsize(fd, parm, arg);
 					break;
 
 				case kFIOINTERACTIVE:
-					d0 = ftrap_interactive(parm, arg);
+					d0 = ftrap_interactive(fd, parm, arg);
 					break;
 
 				case kFIOFNAME:
-					d0 = ftrap_fname(parm, arg);
+					d0 = ftrap_fname(fd, parm, arg);
 					break;
 
 				case kFIOREFNUM:
-					d0 = ftrap_refnum(parm, arg);
+					d0 = ftrap_refnum(fd, parm, arg);
 					break;
 
 				case kFIOSETEOF:
-					d0 = ftrap_seteof(parm, arg);
+					d0 = ftrap_seteof(fd, parm, arg);
 					break;
 
 				default:

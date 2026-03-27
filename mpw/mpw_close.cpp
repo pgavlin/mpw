@@ -48,29 +48,25 @@ namespace MPW
 
 
 	namespace Native {
-		uint32_t Close(uint32_t parm)
+		uint32_t Close(uint32_t parm, int fd)
 		{
 			if (!parm) return kEINVAL;
 
-			MPWFile f;
-			f.cookie = memoryReadLong(parm + 8);
+			if (fd < 0) fd = memoryReadLong(parm + 8);
 
 			uint32_t d0 = 0;
-			int fd = f.cookie;
 
 			int rv = OS::Internal::FDEntry::close(fd);
 			if (rv < 0)
 			{
-				f.error = MacOS::notOpenErr;
+				memoryWriteWord(MacOS::notOpenErr, parm + 2);
 				d0 = kEINVAL;
 			}
 			else
 			{
-				f.error = 0;
+				memoryWriteWord(0, parm + 2);
 				d0 = 0;
 			}
-
-			memoryWriteWord(f.error, parm + 2);
 			return d0;
 		}
 	}

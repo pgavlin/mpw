@@ -51,18 +51,14 @@ namespace MPW
 
 
 	namespace Native {
-		uint32_t Read(uint32_t parm)
+		uint32_t Read(uint32_t parm, int fd)
 		{
 			MPWFile f;
-			f.flags = memoryReadWord(parm);
-			f.error = memoryReadWord(parm + 2);
-			f.device = memoryReadLong(parm + 4);
-			f.cookie = memoryReadLong(parm + 8);
 			f.count = memoryReadLong(parm + 12);
 			f.buffer = memoryReadLong(parm + 16);
+			if (fd < 0) fd = memoryReadLong(parm + 8);
 
 			uint32_t d0 = 0;
-			int fd = f.cookie;
 
 			ssize_t size = OS::Internal::FDEntry::read(fd, memoryPointer(f.buffer), f.count);
 
@@ -82,18 +78,14 @@ namespace MPW
 			return d0;
 		}
 
-		uint32_t Write(uint32_t parm)
+		uint32_t Write(uint32_t parm, int fd)
 		{
 			MPWFile f;
-			f.flags = memoryReadWord(parm);
-			f.error = memoryReadWord(parm + 2);
-			f.device = memoryReadLong(parm + 4);
-			f.cookie = memoryReadLong(parm + 8);
 			f.count = memoryReadLong(parm + 12);
 			f.buffer = memoryReadLong(parm + 16);
+			if (fd < 0) fd = memoryReadLong(parm + 8);
 
 			uint32_t d0 = 0;
-			int fd = f.cookie;
 
 			ssize_t size = OS::Internal::FDEntry::write(fd, memoryPointer(f.buffer), f.count);
 

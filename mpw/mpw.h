@@ -120,13 +120,14 @@ namespace MPW {
 	void ftrap_write(uint16_t trap);
 	void ftrap_ioctl(uint16_t trap);
 
-	// Native versions for PPC: take emulated memory addresses, return D0 value.
+	// Native versions: take emulated memory addresses, return D0 value.
+	// When fd >= 0, use it directly instead of reading cookie from parm+8.
 	namespace Native {
 		uint32_t Access(uint32_t name, uint32_t op, uint32_t parm);
-		uint32_t Read(uint32_t parm);
-		uint32_t Write(uint32_t parm);
-		uint32_t Close(uint32_t parm);
-		uint32_t IOCtl(uint32_t parm, uint32_t cmd, uint32_t arg);
+		uint32_t Read(uint32_t parm, int fd = -1);
+		uint32_t Write(uint32_t parm, int fd = -1);
+		uint32_t Close(uint32_t parm, int fd = -1);
+		uint32_t IOCtl(uint32_t parm, uint32_t cmd, uint32_t arg, int fd = -1);
 	}
 
 }

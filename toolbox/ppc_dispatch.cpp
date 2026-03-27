@@ -902,8 +902,13 @@ void RegisterStdCLibImports() {
 // FSYS Device Handlers — file I/O for PPC
 // ================================================================
 
-static uint32_t patchCookieForNative(uint32_t ioEntry);
-static void restoreCookie(uint32_t ioEntry, uint32_t cookie);
+static int cookieToFd(uint32_t cookieHandle); // forward decl
+
+// Resolve the Handle cookie in an ioEntry to a raw fd number.
+static int ioEntryFd(uint32_t ioEntry) {
+	uint32_t cookie = memoryReadLong(ioEntry + 8);
+	return cookieToFd(cookie);
+}
 
 static void fsys_faccess() {
 	// r3=name (C string ptr), r4=op, r5=parm
@@ -911,27 +916,19 @@ static void fsys_faccess() {
 }
 static void fsys_read() {
 	uint32_t ioEntry = GetGPR(3);
-	uint32_t saved = patchCookieForNative(ioEntry);
-	SetGPR(3, MPW::Native::Read(ioEntry));
-	restoreCookie(ioEntry, saved);
+	SetGPR(3, MPW::Native::Read(ioEntry, ioEntryFd(ioEntry)));
 }
 static void fsys_write() {
 	uint32_t ioEntry = GetGPR(3);
-	uint32_t saved = patchCookieForNative(ioEntry);
-	SetGPR(3, MPW::Native::Write(ioEntry));
-	restoreCookie(ioEntry, saved);
+	SetGPR(3, MPW::Native::Write(ioEntry, ioEntryFd(ioEntry)));
 }
 static void fsys_close() {
 	uint32_t ioEntry = GetGPR(3);
-	uint32_t saved = patchCookieForNative(ioEntry);
-	SetGPR(3, MPW::Native::Close(ioEntry));
-	restoreCookie(ioEntry, saved);
+	SetGPR(3, MPW::Native::Close(ioEntry, ioEntryFd(ioEntry)));
 }
 static void fsys_ioctl() {
 	uint32_t ioEntry = GetGPR(3);
-	uint32_t saved = patchCookieForNative(ioEntry);
-	SetGPR(3, MPW::Native::IOCtl(ioEntry, GetGPR(4), GetGPR(5)));
-	restoreCookie(ioEntry, saved);
+	SetGPR(3, MPW::Native::IOCtl(ioEntry, GetGPR(4), GetGPR(5), ioEntryFd(ioEntry)));
 }
 
 // ================================================================
@@ -960,21 +957,6 @@ static int cookieToFd(uint32_t cookieHandle) {
 static uint32_t allocateCookieHandle(int fdIndex); // forward decl
 static uint32_t ppcEconEntry = 0; // set by PatchDeviceTable
 static uint32_t ppcFsysEntry = 0; // set by PatchDeviceTable
-
-// Temporarily replace the Handle cookie with the raw fd for Native:: calls.
-// Returns the original cookie value for restoration.
-static uint32_t patchCookieForNative(uint32_t ioEntry) {
-	uint32_t cookie = memoryReadLong(ioEntry + 8);
-	int fd = cookieToFd(cookie);
-	if (fd >= 0) {
-		memoryWriteLong(fd, ioEntry + 8);
-	}
-	return cookie;
-}
-
-static void restoreCookie(uint32_t ioEntry, uint32_t cookie) {
-	memoryWriteLong(cookie, ioEntry + 8);
-}
 
 static void econ_read() {
 	uint32_t ioEntry = GetGPR(3);
@@ -1062,9 +1044,7 @@ static void econ_ioctl() {
 	default: {
 		// Forward to standard FSYS ioctl handler for file operations
 		// (FIOREFNUM, FIOLSEEK, FIOSETEOF, etc.)
-		uint32_t saved = patchCookieForNative(ioEntry);
-		SetGPR(3, MPW::Native::IOCtl(ioEntry, cmd, arg));
-		restoreCookie(ioEntry, saved);
+		SetGPR(3, MPW::Native::IOCtl(ioEntry, cmd, arg, ioEntryFd(ioEntry)));
 		break;
 	}
 	}
