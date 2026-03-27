@@ -36,6 +36,7 @@
 #include <fstream>
 
 #include <rsrc/rsrc.h>
+#include <capstone.h>
 
 #include <cpu/m68k/defs.h>
 #include <cpu/m68k/fmem.h>
@@ -43,6 +44,7 @@
 
 #include <macos/traps.h>
 #include <macos/sysequ.h>
+#include <toolbox/pef.h>
 
 char strings[4][256];
 
@@ -75,7 +77,10 @@ void help()
 	fprintf(stderr, "  --raw-type <type> <id>\n");
 	fprintf(stderr, "                Treat file as a raw resource of given type/id\n");
 	fprintf(stderr, "\n");
-	fprintf(stderr, "Without options, reads CODE resources from the file's resource fork.\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "Without options, auto-detects the format:\n");
+	fprintf(stderr, "  - PEF data fork (Joy!peff magic): PPC disassembly via Capstone\n");
+	fprintf(stderr, "  - Resource fork with CODE/DRVR: 68K disassembly\n");
 }
 
 
@@ -329,6 +334,117 @@ void disasmRaw(const uint8_t *data, uint32_t size)
 	memorySetMemory(nullptr, 0);
 }
 
+// ================================================================
+// PPC (PEF) disassembly via Capstone
+// ================================================================
+
+static uint32_t readBE32(const uint8_t *p) {
+	return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+	       ((uint32_t)p[2] << 8) | p[3];
+}
+
+static bool isPEF(const uint8_t *data, size_t size) {
+	if (size < 8) return false;
+	return readBE32(data) == PEF::kPEFTag1 && readBE32(data + 4) == PEF::kPEFTag2;
+}
+
+void disasmPEF(const uint8_t *data, size_t size)
+{
+	csh cs;
+	if (cs_open(CS_ARCH_PPC, CS_MODE_BIG_ENDIAN, &cs) != CS_ERR_OK) {
+		fprintf(stderr, "Failed to initialize Capstone PPC disassembler\n");
+		return;
+	}
+
+	// Parse PEF container header
+	if (size < 40) {
+		fprintf(stderr, "PEF file too small\n");
+		cs_close(&cs);
+		return;
+	}
+
+	uint32_t tag1 = readBE32(data + 0);
+	uint32_t tag2 = readBE32(data + 4);
+	uint32_t arch = readBE32(data + 8);
+	uint32_t formatVersion = readBE32(data + 12);
+	uint16_t sectionCount = readBE16(data + 32);
+	// uint16_t instSectionCount = readBE16(data + 34);
+
+	char archStr[5] = {};
+	archStr[0] = (arch >> 24) & 0xFF;
+	archStr[1] = (arch >> 16) & 0xFF;
+	archStr[2] = (arch >> 8) & 0xFF;
+	archStr[3] = arch & 0xFF;
+
+	printf("; PEF Container\n");
+	printf(";   Architecture: %s\n", archStr);
+	printf(";   Sections:     %d\n", sectionCount);
+	printf(";\n");
+
+	// Parse section headers (each 28 bytes, starting at offset 40)
+	for (int i = 0; i < sectionCount; i++) {
+		uint32_t shOff = 40 + i * 28;
+		if (shOff + 28 > size) break;
+
+		int32_t  nameOffset       = (int32_t)readBE32(data + shOff + 0);
+		uint32_t defaultAddress   = readBE32(data + shOff + 4);
+		uint32_t totalSize        = readBE32(data + shOff + 8);
+		uint32_t unpackedSize     = readBE32(data + shOff + 12);
+		uint32_t packedSize       = readBE32(data + shOff + 16);
+		uint32_t containerOffset  = readBE32(data + shOff + 20);
+		uint8_t  sectionKind      = data[shOff + 24];
+
+		const char *kindName = "unknown";
+		switch (sectionKind) {
+		case 0: kindName = "code"; break;
+		case 1: kindName = "unpacked data"; break;
+		case 2: kindName = "pattern-init data"; break;
+		case 3: kindName = "constant"; break;
+		case 4: kindName = "loader"; break;
+		case 5: kindName = "debug"; break;
+		case 6: kindName = "exec data"; break;
+		case 7: kindName = "exception"; break;
+		case 8: kindName = "traceback"; break;
+		}
+
+		printf("; Section [%d]: %s, size=0x%X", i, kindName, totalSize);
+		if (sectionKind == 2)
+			printf(" (packed=0x%X, unpacked=0x%X)", packedSize, unpackedSize);
+		printf("\n");
+
+		// Only disassemble code sections
+		if (sectionKind != 0) continue;
+		if (containerOffset + packedSize > size) {
+			fprintf(stderr, "; Section %d: data beyond file end\n", i);
+			continue;
+		}
+
+		const uint8_t *codeData = data + containerOffset;
+		uint32_t codeSize = packedSize; // for code sections, packed == unpacked
+
+		printf("\nsection %d - code\n", i);
+
+		cs_insn *insn;
+		size_t n = cs_disasm(cs, codeData, codeSize, 0, 0, &insn);
+		if (n == 0) {
+			fprintf(stderr, "; Failed to disassemble section %d\n", i);
+			continue;
+		}
+
+		for (size_t j = 0; j < n; j++) {
+			uint32_t raw = readBE32(codeData + insn[j].address);
+			printf("$%08X   %08X   %-8s %s\n",
+			       (uint32_t)insn[j].address, raw,
+			       insn[j].mnemonic, insn[j].op_str);
+		}
+
+		cs_free(insn, n);
+		printf("\n\n");
+	}
+
+	cs_close(&cs);
+}
+
 int main(int argc, char **argv)
 {
 	const uint32_t kCODE = 0x434f4445;
@@ -398,7 +514,17 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	// Default: read CODE resources from resource fork
+	// Default: auto-detect PEF vs resource fork
+	{
+		auto fileData = readFile(filePath);
+		if (!fileData.empty() && isPEF(fileData.data(), fileData.size()))
+		{
+			disasmPEF(fileData.data(), fileData.size());
+			return 0;
+		}
+	}
+
+	// Not PEF — try resource fork (CODE/DRVR)
 	auto forkData = rsrc::readResourceFork(filePath);
 	if (forkData.empty())
 	{

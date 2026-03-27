@@ -28,6 +28,9 @@ endif()
 
 include_directories("${CMAKE_SOURCE_DIR}")
 
+include(FindPkgConfig)
+pkg_check_modules(CAPSTONE REQUIRED capstone)
+
 add_subdirectory(bin)
 add_subdirectory(cpu)
 add_subdirectory(rsrc)

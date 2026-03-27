@@ -98,6 +98,9 @@ add_executable(disasm disasm.cpp)
 target_link_libraries(disasm M68K_LIB)
 target_link_libraries(disasm MACOS_LIB)
 target_link_libraries(disasm RSRC_LIB)
+target_include_directories(disasm PRIVATE ${CMAKE_SOURCE_DIR} ${CAPSTONE_INCLUDE_DIRS})
+target_link_directories(disasm PRIVATE ${CAPSTONE_LIBRARY_DIRS})
+target_link_libraries(disasm ${CAPSTONE_LIBRARIES})
 
 install(
   PROGRAMS
