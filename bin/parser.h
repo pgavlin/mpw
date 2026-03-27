@@ -45,7 +45,8 @@
 #define tkEQ                              45
 #define tkAREGISTER                       46
 #define tkXREGISTER                       47
-#define tkHELP                            48
-#define tkLPAREN                          49
-#define tkRPAREN                          50
-#define tkINTEGER                         51
+#define tkGPREGISTER                      48
+#define tkHELP                            49
+#define tkLPAREN                          50
+#define tkRPAREN                          51
+#define tkINTEGER                         52
