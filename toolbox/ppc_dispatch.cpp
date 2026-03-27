@@ -978,7 +978,7 @@ static void econ_read() {
 			memoryWriteLong(0, ioEntry + 12);
 		} else {
 			memoryWriteWord(0, ioEntry + 2);
-			memoryWriteLong((uint32_t)n, ioEntry + 12);
+			memoryWriteLong(count - (uint32_t)n, ioEntry + 12);
 		}
 		SetGPR(3, n < 0 ? (uint32_t)-1 : 0);
 	} else {
@@ -1011,8 +1011,13 @@ static void econ_write() {
 		}
 
 		ssize_t n = ::write(hostFd, converted.data(), converted.size());
-		memoryWriteWord(n < 0 ? 0xFFFF : 0, ioEntry + 2);
-		memoryWriteLong(n < 0 ? 0 : (uint32_t)n, ioEntry + 12);
+		if (n < 0) {
+			memoryWriteWord(0xFFFF, ioEntry + 2);
+			memoryWriteLong(0, ioEntry + 12);
+		} else {
+			memoryWriteWord(0, ioEntry + 2);
+			memoryWriteLong(count - (uint32_t)n, ioEntry + 12);
+		}
 		SetGPR(3, n < 0 ? (uint32_t)-1 : 0);
 	} else {
 		// File fd: patch cookie to raw fd for Native handler
