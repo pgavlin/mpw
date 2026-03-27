@@ -758,6 +758,10 @@ static void RunPPC(int argc, char **argv, const std::string &command) {
 		profiler = nullptr;
 	}
 
+	if (Flags.memoryStats) {
+		MM::Native::PrintMemoryStats();
+	}
+
 	// Capture exit code from MPGM info+0x0E
 	uint32_t rv = MPW::ExitStatus();
 	if (rv > 0xff) rv = 0xff;

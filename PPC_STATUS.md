@@ -1,6 +1,6 @@
 # PPC Emulator Status
 
-The MPW emulator can run PowerPC MPW tools alongside the existing 68K support. PPC execution uses the Unicorn Engine for CPU emulation, with real Mac OS shared libraries (StdCLib) running natively in the emulated environment.
+The MPW emulator can run PowerPC MPW tools alongside the existing 68K support. PPC execution uses the Unicorn Engine for CPU emulation, with real Mac OS shared libraries (StdCLib) running natively in the emulated environment. All major features (tracing, debugging, profiling, disassembly, file I/O) have PPC support at feature parity with 68K.
 
 ## Quick Start
 
@@ -25,6 +25,11 @@ mkdir build && cd build && cmake .. && make
 
 # Disassemble a PPC binary
 ./bin/disasm tools/Hello
+
+# Profiling
+./bin/mpw --profile tools/Hello                     # instruction count
+./bin/mpw --profile --profile-cycles tools/Hello    # estimated PPC cycles
+# produces mpw.callgrind — view with kcachegrind/qcachegrind
 ```
 
 The emulator auto-detects PPC vs 68K: if the tool has CODE resources in its resource fork, 68K is used. Otherwise, if the data fork starts with PEF magic (`Joy!peff`), PPC is used. Use `--ppc` or `--68k` to override for fat binaries.
@@ -136,6 +141,8 @@ The emulator auto-detects PPC vs 68K: if the tool has CODE resources in its reso
 - 95 InterfaceLib + 4 MathLib + 2 PrivateInterfaceLib stubs
 - Interactive PPC debugger (step, break, registers, memory, disassembly)
 - PPC disassembly in `disasm` tool (auto-detects PEF, uses Capstone)
+- PPC profiling with callgrind output (instruction count or estimated cycles)
+- Memory stats (`--memory-stats`)
 - Exit code capture via MPW::ExitStatus()
 - CallUniversalProc PPC trampoline (dispatches PPC TVectors and 68K descriptors)
 
@@ -145,6 +152,23 @@ The emulator auto-detects PPC vs 68K: if the tool has CODE resources in its reso
 | `tools/Hello` | Working. Prints "Hello, world!", exits 0. |
 | `tools/FileRead` | Working. fopen/fread/fgetc all work correctly. |
 | `~/mpw/Tools/DumpPEF` | Partial. Opens files, reads PEF headers, but crashes during section parsing (unmapped memory read at 0xF24A04). |
+
+### Feature Parity with 68K
+
+| Feature | 68K | PPC | Notes |
+|---------|-----|-----|-------|
+| Run tools | Yes | Yes | Auto-detected |
+| `--trace-cpu` | Yes | Yes | |
+| `--trace-toolbox` | Yes | Yes | |
+| `--trace-mpw` | Yes | Yes | |
+| `--trace-macsbug` | Yes | N/A | 68K MacsBug symbols; PPC uses PEF exports |
+| `--debug` | Yes | Yes | Step, break, registers, memory, disasm |
+| `--profile` | Yes | Yes | Callgrind output |
+| `--profile-cycles` | N/A | Yes | PPC-specific estimated 603e cycle costs |
+| `--memory-stats` | Yes | Yes | |
+| `disasm` tool | Yes | Yes | Auto-detects PEF vs CODE/DRVR |
+| File I/O | Yes | Yes | Shared MPW::Native:: functions |
+| Exit code | Yes | Yes | |
 
 ### Known Limitations
 - **16 MB address space**: Tools + libraries + data must fit in 16 MB. Increase with `--memory`.
@@ -178,6 +202,9 @@ Write a `.c` file, add a Makefile target, and `make` it. The resulting PEF binar
 | `--trace-toolbox` | Every sc stub call with args and return values |
 | `--trace-mpw` | ECON/FSYS device handler calls (read/write/ioctl) |
 | `--trace-cpu` | Every PPC instruction (very verbose) |
+| `--profile` | Generate callgrind profiling output (instruction count) |
+| `--profile-cycles` | Use estimated PPC 603e cycle costs instead of instruction count |
+| `--memory-stats` | Print memory allocator statistics after execution |
 
 ### Interactive Debugger
 ```bash

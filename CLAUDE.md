@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MPW (Macintosh Programmer's Workshop) Emulator — emulates the MPW command-line environment and Motorola 68000 CPU, allowing classic Mac MPW tools to run on modern macOS and Linux. Requires libedit for the debugger.
+MPW (Macintosh Programmer's Workshop) Emulator — emulates the MPW command-line environment for both Motorola 68000 and PowerPC CPUs, allowing classic Mac MPW tools to run on modern macOS and Linux. 68K emulation uses an adapted WinFellow CPU core; PPC emulation uses the Unicorn Engine with the real Mac OS StdCLib shared library running natively. Requires libedit for the debugger. See `PPC_STATUS.md` for detailed PPC emulator documentation.
 
 ## Build Commands
 
@@ -21,6 +21,7 @@ make
 ```
 
 **Required tools:** cmake (3.1+), ragel (version 6), lemon, clang++ with C++11 support.
+**Required libraries:** libunicorn (PPC emulation), libcapstone (PPC disassembly), libedit (debugger readline).
 
 ## Tests
 
@@ -30,11 +31,13 @@ Tests in `test/` are MPW-hosted programs (compiled and linked using MPW tools vi
 
 The emulator has five main layers:
 
-- **`cpu/`** — Motorola 680x0 CPU emulation, adapted from the WinFellow project. Mostly large generated C files implementing instruction decoding, execution, and disassembly. Integration point: `CpuIntegration.c`.
+- **`cpu/m68k/`** — Motorola 680x0 CPU emulation, adapted from the WinFellow project. Mostly large generated C files implementing instruction decoding, execution, and disassembly. Integration point: `CpuIntegration.c`.
 
-- **`toolbox/`** — Macintosh Toolbox/OS trap emulation. `dispatch.cpp` routes A-line traps to implementations across ~40 files covering Memory Manager (`mm.cpp`), Resource Manager (`rm.cpp`), OS calls (`os.cpp`, `os_hfs_dispatch.cpp`), SANE floating-point (`sane.cpp`), and more.
+- **`cpu/ppc/`** — PowerPC CPU emulation via Unicorn Engine. `ppc.cpp` wraps Unicorn with PPC register access, `sc` interrupt handling for CFM stub dispatch, code trace/profiler hooks, and Capstone-based disassembly.
 
-- **`mpw/`** — MPW environment emulation: file I/O (`mpw_io.cpp`), environment variables, errno mapping. The environment variable parser is generated from `environment.rl` (Ragel).
+- **`toolbox/`** — Macintosh Toolbox/OS trap emulation. `dispatch.cpp` routes A-line traps to implementations across ~40 files covering Memory Manager (`mm.cpp`), Resource Manager (`rm.cpp`), OS calls (`os.cpp`, `os_hfs_dispatch.cpp`), SANE floating-point (`sane.cpp`), and more. PPC-specific: `ppc_dispatch.cpp` (95 InterfaceLib stubs + ECON/FSYS device handlers), `cfm_stubs.cpp` (sc-based import dispatch), `pef_loader.cpp` (PEF loader with pidata decompression and relocation engine).
+
+- **`mpw/`** — MPW environment emulation: file I/O (`mpw_io.cpp`), environment variables, errno mapping. File I/O functions are factored into `MPW::Native::` versions shared by both 68K and PPC paths. The environment variable parser is generated from `environment.rl` (Ragel).
 
 - **`macos/`** — System-level definitions: trap tables (`traps.c`), system equates (`sysequ.c`), error codes (`errors.cpp`).
 
