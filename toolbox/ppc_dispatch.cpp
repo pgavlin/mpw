@@ -36,6 +36,8 @@
 #include <ctime>
 #include <chrono>
 #include <algorithm>
+#include <vector>
+#include <map>
 #include <unistd.h>
 
 namespace {
@@ -726,6 +728,204 @@ void RegisterStdCLibImports() {
 	// -- PrivateInterfaceLib (2) --
 	reg("PrivateInterfaceLib", "GetEmulatorRegister", wrap_GetEmulatorRegister);
 	reg("PrivateInterfaceLib", "SetEmulatorRegister", wrap_SetEmulatorRegister);
+}
+
+// ================================================================
+// ECON Device Handlers (Phase 6)
+// ================================================================
+
+// Cookie address → host fd mapping
+static std::map<uint32_t, int> cookieFdMap;
+
+static int cookieToFd(uint32_t cookieHandle) {
+	// Check host-side map first (most reliable)
+	auto it = cookieFdMap.find(cookieHandle);
+	if (it != cookieFdMap.end()) return it->second;
+
+	// Dereference Handle → master ptr → cookie data → fd index at +0x00
+	// Safety: validate addresses are in emulated memory range
+	// (low addresses < 0x1000 are likely bare fd numbers, not Handles)
+	if (cookieHandle < 0x10000) return -1;
+	uint32_t masterPtr = memoryReadLong(cookieHandle);
+	if (masterPtr < 0x10000) return -1;
+	int32_t fdIndex = (int32_t)memoryReadLong(masterPtr);
+	if (fdIndex >= 0 && fdIndex <= 2) return fdIndex;
+	return -1;
+}
+
+static void econ_read() {
+	uint32_t ioEntry = GetGPR(3);
+	uint32_t cookie = memoryReadLong(ioEntry + 8);
+	int hostFd = cookieToFd(cookie);
+	uint32_t count = memoryReadLong(ioEntry + 12);
+	uint32_t buffer = memoryReadLong(ioEntry + 16);
+
+	if (MPW::Trace) {
+		fprintf(stderr, "  ECON read(fd=%d, count=%u)\n", hostFd, count);
+	}
+
+	ssize_t n = ::read(hostFd, memoryPointer(buffer), count);
+	if (n < 0) {
+		memoryWriteWord(0xFFFF, ioEntry + 2);
+		memoryWriteLong(0, ioEntry + 12);
+	} else {
+		memoryWriteWord(0, ioEntry + 2);
+		memoryWriteLong((uint32_t)n, ioEntry + 12);
+	}
+	SetGPR(3, n < 0 ? (uint32_t)-1 : 0);
+}
+
+static void econ_write() {
+	uint32_t ioEntry = GetGPR(3);
+	uint32_t cookie = memoryReadLong(ioEntry + 8);
+	int hostFd = cookieToFd(cookie);
+	uint32_t count = memoryReadLong(ioEntry + 12);
+	uint32_t buffer = memoryReadLong(ioEntry + 16);
+
+	if (MPW::Trace) {
+		fprintf(stderr, "  ECON write(fd=%d, count=%u, buf=\"%.*s\")\n",
+		        hostFd, count, std::min(count, 40u),
+		        (const char *)memoryPointer(buffer));
+	}
+
+	// CR→LF conversion
+	uint8_t *ptr = memoryPointer(buffer);
+	std::vector<uint8_t> converted;
+	for (uint32_t i = 0; i < count; i++) {
+		uint8_t c = ptr[i];
+		converted.push_back(c == '\r' ? '\n' : c);
+	}
+
+	ssize_t n = ::write(hostFd, converted.data(), converted.size());
+	memoryWriteWord(n < 0 ? 0xFFFF : 0, ioEntry + 2);
+	memoryWriteLong(n < 0 ? 0 : (uint32_t)n, ioEntry + 12);
+	SetGPR(3, n < 0 ? (uint32_t)-1 : 0);
+}
+
+static void econ_close() {
+	if (MPW::Trace) fprintf(stderr, "  ECON close()\n");
+	SetGPR(3, 0);
+}
+
+static void econ_ioctl() {
+	fprintf(stderr, "ECON_IOCTL ENTERED\n");
+	uint32_t ioEntry = GetGPR(3);
+	uint32_t cmd = GetGPR(4);
+	uint32_t arg = GetGPR(5);
+
+	if (MPW::Trace) {
+		static const char *cmdNames[] = {"?","FIODUPFD","FIOINTERACTIVE",
+		                                  "FIOBUFSIZE","?","FIOREFNUM"};
+		const char *cmdName = (cmd >= 0x6601 && cmd <= 0x6605)
+		                      ? cmdNames[cmd - 0x6600] : "unknown";
+		fprintf(stderr, "  ECON ioctl(cmd=%s/0x%04X, arg=0x%08X)\n",
+		        cmdName, cmd, arg);
+	}
+
+	switch (cmd) {
+	case 0x6601: { // FIODUPFD
+		uint32_t cookie = memoryReadLong(ioEntry + 8);
+		int fd = cookieToFd(cookie);
+		fprintf(stderr, "  ECON FIODUPFD: cookie=0x%08X fd=%d\n", cookie, fd);
+		if (fd >= 0) cookieFdMap[cookie] = fd;
+		SetGPR(3, 0);
+		break;
+	}
+	case 0x6602: // FIOINTERACTIVE
+		SetGPR(3, 0); // 0 = interactive
+		break;
+	case 0x6603: // FIOBUFSIZE
+		if (arg) memoryWriteLong(2048, arg);
+		SetGPR(3, 0);
+		break;
+	case 0x6605: // FIOREFNUM
+		SetGPR(3, (uint32_t)(int32_t)-1);
+		break;
+	default:
+		if (MPW::Trace)
+			fprintf(stderr, "    unknown ECON ioctl 0x%04X\n", cmd);
+		SetGPR(3, (uint32_t)(int32_t)-1);
+		break;
+	}
+
+	if (MPW::Trace)
+		fprintf(stderr, "    -> %d\n", (int32_t)GetGPR(3));
+}
+
+static void econ_faccess() {
+	if (MPW::Trace) fprintf(stderr, "  ECON faccess()\n");
+	SetGPR(3, 0);
+}
+
+// Allocate a cookie Handle for a stdio fd.
+// A Handle is a pointer to a master pointer, which points to the data.
+// We simulate a Handle using two NewPtr allocations:
+//   - One for the cookie data (0x10 bytes)
+//   - One for the master pointer (4 bytes, points to cookie data)
+// The "Handle" is the address of the master pointer block.
+static uint32_t allocateCookieHandle(int fdIndex) {
+	// Allocate cookie data block
+	uint32_t cookieData = 0;
+	MM::Native::NewPtr(0x10, true, cookieData);
+	if (!cookieData) return 0;
+
+	memoryWriteLong(fdIndex, cookieData + 0x00);  // fd index for FIODUPFD
+	memoryWriteLong(fdIndex, cookieData + 0x04);  // fd index for _coWrite
+	memoryWriteByte(0, cookieData + 0x0C);         // not connected
+
+	// Allocate master pointer block (simulates Handle)
+	// Use 16 bytes minimum to avoid mplite minimum block size issues
+	uint32_t masterPtrBlock = 0;
+	MM::Native::NewPtr(16, true, masterPtrBlock);
+	if (!masterPtrBlock) return 0;
+
+	// Master pointer points to cookie data
+	memoryWriteLong(cookieData, masterPtrBlock);
+
+	return masterPtrBlock;
+}
+
+void PatchDeviceTable(uint32_t mpgmInfoAddr) {
+	// Read device table and IO table pointers from MPGM info block
+	uint32_t devTablePtr = memoryReadLong(mpgmInfoAddr + 0x20);
+	uint32_t ioTablePtr = memoryReadLong(mpgmInfoAddr + 0x1C);
+
+	if (!devTablePtr || !ioTablePtr) return;
+
+	// Register ECON handler sc stubs
+	uint32_t econFaccess = CFMStubs::RegisterStub("_ECON", "faccess", econ_faccess);
+	uint32_t econClose   = CFMStubs::RegisterStub("_ECON", "close", econ_close);
+	uint32_t econRead    = CFMStubs::RegisterStub("_ECON", "read", econ_read);
+	uint32_t econWrite   = CFMStubs::RegisterStub("_ECON", "write", econ_write);
+	uint32_t econIoctl   = CFMStubs::RegisterStub("_ECON", "ioctl", econ_ioctl);
+
+	// Write TVectors into the ECON device table entry (devTable + 24)
+	uint32_t econEntry = devTablePtr + 24;
+	// 'ECON' name is already written by MPW::Init()
+	memoryWriteLong(econFaccess, econEntry + 4);
+	memoryWriteLong(econClose, econEntry + 8);
+	memoryWriteLong(econRead, econEntry + 12);
+	memoryWriteLong(econWrite, econEntry + 16);
+	memoryWriteLong(econIoctl, econEntry + 20);
+
+	// Allocate Handle-based cookies and patch IO table
+	struct { int fd; uint16_t flags; } fds[] = {
+		{STDIN_FILENO,  0x0001},  // read
+		{STDOUT_FILENO, 0x0002},  // write
+		{STDERR_FILENO, 0x0002},  // write
+	};
+
+	// Patch IO table entries: allocate Handle cookies, point at ECON device
+	for (int i = 0; i < 3; i++) {
+		uint32_t ioEntry = ioTablePtr + i * 20;
+		uint32_t cookieHandle = allocateCookieHandle(fds[i].fd);
+
+		if (cookieHandle) {
+			memoryWriteLong(cookieHandle, ioEntry + 8);
+		}
+
+		memoryWriteLong(econEntry, ioEntry + 4);
+	}
 }
 
 } // namespace PPCDispatch

@@ -592,6 +592,7 @@ static void RunPPC(int argc, char **argv, const std::string &command) {
 		CFMStubs::SetTrace(true);
 		PEFLoader::SetTrace(true);
 	}
+	MPW::Trace = Flags.traceMPW;
 
 	// Track loaded libraries
 	std::map<std::string, PEFLoader::LoadResult> loadedLibs;
@@ -651,6 +652,15 @@ static void RunPPC(int argc, char **argv, const std::string &command) {
 		exit(EX_SOFTWARE);
 	}
 
+	// Patch MPGM device table and IO table for PPC:
+	// Must happen after PEF loading (which allocates sections) but before
+	// library init (which reads the device/IO tables).
+	{
+		uint32_t mpgmHdr = memoryReadLong(0x0316);
+		uint32_t mpgmInfo = memoryReadLong(mpgmHdr + 4);
+		PPCDispatch::PatchDeviceTable(mpgmInfo);
+	}
+
 	// Run library init routines
 	for (auto &kv : loadedLibs) {
 		if (kv.second.initPoint) {
@@ -685,6 +695,11 @@ static void RunPPC(int argc, char **argv, const std::string &command) {
 		fprintf(stderr, "PPC: no entry point in %s\n", command.c_str());
 		exit(EX_SOFTWARE);
 	}
+
+	// Capture exit code from MPGM info+0x0E
+	uint32_t rv = MPW::ExitStatus();
+	if (rv > 0xff) rv = 0xff;
+	exit(rv);
 }
 
 int main(int argc, char **argv)
