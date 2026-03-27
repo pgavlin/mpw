@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include <map>
 #include <functional>
 
 namespace CFMStubs {
@@ -48,6 +49,10 @@ namespace CFMStubs {
 	// PPC code that must exist in emulated memory.
 	uint32_t AllocateCode(const uint32_t *instructions,
 	                      uint32_t count);
+
+	// Return a map of code address -> "library::symbol" for all registered stubs.
+	// Used by the profiler for symbol resolution.
+	std::map<uint32_t, std::string> GetStubNames();
 }
 
 #endif

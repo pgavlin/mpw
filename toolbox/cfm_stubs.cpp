@@ -207,4 +207,12 @@ uint32_t AllocateCode(const uint32_t *instructions, uint32_t count) {
 	return tvecAddr;
 }
 
+std::map<uint32_t, std::string> GetStubNames() {
+	std::map<uint32_t, std::string> result;
+	for (auto &s : stubs) {
+		result[s.codeAddr] = s.fullName;
+	}
+	return result;
+}
+
 } // namespace CFMStubs

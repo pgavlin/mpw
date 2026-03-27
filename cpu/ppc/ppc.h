@@ -71,6 +71,12 @@ namespace PPC {
 	// Enable per-instruction trace output to stderr.
 	// Activated by the existing --trace-cpu flag when running a PPC tool.
 	void SetTraceCode(bool enable);
+
+	// Set a callback invoked before each instruction.
+	// The callback receives (pc, instruction_word) with the instruction
+	// in big-endian (native PPC) byte order.
+	using CodeHookFunc = std::function<void(uint32_t pc, uint32_t instr)>;
+	void SetCodeHook(CodeHookFunc hook);
 }
 
 #endif

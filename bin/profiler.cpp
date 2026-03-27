@@ -35,6 +35,7 @@
 #include <cpu/m68k/defs.h>
 #include <cpu/m68k/CpuModule.h>
 #include <cpu/m68k/fmem.h>
+#include <cpu/ppc/ppc.h>
 
 #include <toolbox/loader.h>
 #include <macos/traps.h>
@@ -297,6 +298,96 @@ void Profiler::afterInstruction(uint32_t pc, uint32_t cycles) {
 
 		// record the instruction cost under the trap's synthetic address
 		impl->instrCycles[trapAddr] += cycles;
+	}
+}
+
+// ================================================================
+// PPC Profiling
+// ================================================================
+
+uint32_t Profiler::ppcEstimateCycles(uint32_t instr) {
+	uint32_t op = (instr >> 26) & 0x3F;
+	switch (op) {
+	case 31: { // extended ALU/misc
+		uint32_t xo = (instr >> 1) & 0x3FF;
+		switch (xo) {
+		case 235: case 75:  return 3;  // mullw, mulhw
+		case 491: case 459: return 37; // divw, divwu
+		default: return 1;
+		}
+	}
+	case 48: case 49: case 50: case 51: return 2; // lfs, lfsu, lfd, lfdu
+	case 52: case 53: case 54: case 55: return 2; // stfs, stfsu, stfd, stfdu
+	case 59: case 63: return 2; // FP single/double ops
+	case 32: case 33: case 34: case 35:
+	case 40: case 41: case 42: case 43: return 2; // loads
+	case 36: case 37: case 38: case 39:
+	case 44: case 45: case 46: case 47: return 1; // stores
+	default: return 1; // ALU, cmp, branch, etc.
+	}
+}
+
+void Profiler::initializePPC(uint32_t entryPC,
+                              const std::map<std::string, uint32_t> &symbols) {
+	// Populate symbol table from PEF exports and library imports
+	for (auto &kv : symbols) {
+		impl->addrToName[kv.second] = kv.first;
+	}
+
+	impl->pushFrame(entryPC, 0, 0xFFFFFFFF, false);
+	impl->functionName(entryPC);
+	if (impl->functions[entryPC].name.substr(0, 4) == "sub_") {
+		impl->functions[entryPC].name = "_start";
+		impl->addrToName[entryPC] = "_start";
+	}
+}
+
+void Profiler::beforePPCInstruction(uint32_t pc, uint32_t instr) {
+	impl->pendingCall = false;
+	impl->pendingReturn = false;
+	impl->pendingTrap = false;
+
+	// bl (branch and link): primary opcode 18, LK bit set
+	// bctrl (branch to CTR, link): 0x4E800421
+	// blrl (branch to LR, link): 0x4E800021
+	if ((instr & 0xFC000001) == 0x48000001 ||
+	    instr == 0x4E800421 || instr == 0x4E800021) {
+		impl->pendingCall = true;
+		impl->callSitePC = pc;
+	}
+	// blr (return): 0x4E800020
+	else if (instr == 0x4E800020) {
+		impl->pendingReturn = true;
+	}
+	// sc (system call): primary opcode 17, bit 1 set
+	else if ((instr & 0xFC000002) == 0x44000002) {
+		impl->pendingTrap = true;
+		impl->callSitePC = pc;
+	}
+}
+
+void Profiler::afterPPCInstruction(uint32_t pc, uint32_t cycles) {
+	impl->instrCycles[pc] += cycles;
+	if (!impl->callStack.empty()) {
+		impl->callStack.back().selfCycles += cycles;
+	}
+
+	if (impl->pendingCall) {
+		uint32_t newPC = PPC::GetPC();
+		uint32_t lr = PPC::GetLR();
+		impl->pushFrame(newPC, impl->callSitePC, lr, false);
+	}
+
+	if (impl->pendingReturn) {
+		uint32_t newPC = PPC::GetPC();
+		impl->popFramesTo(newPC);
+	}
+
+	if (impl->pendingTrap) {
+		// sc instructions dispatch to host-side handlers.
+		// The sc handler sets PC = LR, so after the instruction
+		// PC is back at the caller. We don't create a separate
+		// frame for sc — the cost is attributed to the calling function.
 	}
 }
 

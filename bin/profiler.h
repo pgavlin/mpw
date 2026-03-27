@@ -29,6 +29,7 @@
 
 #include <cstdint>
 #include <string>
+#include <map>
 
 class Profiler {
 public:
@@ -38,7 +39,17 @@ public:
 	void initialize();
 	void beforeInstruction(uint32_t pc, uint16_t opcode);
 	void afterInstruction(uint32_t pc, uint32_t cycles);
+
+	// PPC profiling
+	void initializePPC(uint32_t entryPC,
+	                   const std::map<std::string, uint32_t> &symbols);
+	void beforePPCInstruction(uint32_t pc, uint32_t instr);
+	void afterPPCInstruction(uint32_t pc, uint32_t cycles);
+
 	void writeOutput(const std::string &filename);
+
+	// Estimate PPC 603e cycle cost for an instruction.
+	static uint32_t ppcEstimateCycles(uint32_t instr);
 
 private:
 	struct Impl;

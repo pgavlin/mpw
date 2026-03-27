@@ -22,6 +22,7 @@ namespace {
 
 	uc_engine *uc = nullptr;
 	PPC::SCHandler scHandler;
+	PPC::CodeHookFunc codeHookFunc;
 	bool stopped = false;
 	bool traceCode = false;
 	uc_hook intrHook = 0;
@@ -67,28 +68,30 @@ namespace {
 		uc_reg_write(uc_, UC_PPC_REG_PC, &lr);
 	}
 
-	// Code trace hook -- fires before each instruction when tracing.
+	// Code hook -- fires before each instruction when tracing or profiling.
 	void codeTraceHook_cb(uc_engine *uc_, uint64_t address,
 	                      uint32_t size, void *user_data) {
 		(void)user_data;
 		(void)size;
 
-		if (!traceCode) return;
-
 		// Read the instruction (big-endian in emulated memory)
 		uint32_t instr = 0;
 		uc_mem_read(uc_, address, &instr, 4);
-		// Unicorn reads raw bytes; PPC is big-endian, so on little-endian
-		// host we need to swap for display.
 		uint32_t instrBE = __builtin_bswap32(instr);
 
-		uint32_t lr, r1, r2, r3;
-		uc_reg_read(uc_, UC_PPC_REG_LR, &lr);
-		uc_reg_read(uc_, UC_PPC_REG_1, &r1);
-		uc_reg_read(uc_, UC_PPC_REG_2, &r2);
-		uc_reg_read(uc_, UC_PPC_REG_3, &r3);
-		fprintf(stderr, "  PPC %08X: %08X  LR=%08X SP=%08X TOC=%08X R3=%08X\n",
-		        (uint32_t)address, instrBE, lr, r1, r2, r3);
+		if (codeHookFunc) {
+			codeHookFunc((uint32_t)address, instrBE);
+		}
+
+		if (traceCode) {
+			uint32_t lr, r1, r2, r3;
+			uc_reg_read(uc_, UC_PPC_REG_LR, &lr);
+			uc_reg_read(uc_, UC_PPC_REG_1, &r1);
+			uc_reg_read(uc_, UC_PPC_REG_2, &r2);
+			uc_reg_read(uc_, UC_PPC_REG_3, &r3);
+			fprintf(stderr, "  PPC %08X: %08X  LR=%08X SP=%08X TOC=%08X R3=%08X\n",
+			        (uint32_t)address, instrBE, lr, r1, r2, r3);
+		}
 	}
 
 } // anonymous namespace
@@ -260,14 +263,23 @@ namespace PPC {
 		scHandler = std::move(handler);
 	}
 
-	void SetTraceCode(bool enable) {
-		traceCode = enable;
-		if (enable && uc && !codeHook) {
+	static void ensureCodeHook() {
+		if (uc && !codeHook) {
 			uc_err err = uc_hook_add(uc, &codeHook, UC_HOOK_CODE,
 			                         (void *)codeTraceHook_cb,
 			                         nullptr, 1, 0);
-			checkErr(err, "uc_hook_add(CODE trace)");
+			checkErr(err, "uc_hook_add(CODE)");
 		}
+	}
+
+	void SetTraceCode(bool enable) {
+		traceCode = enable;
+		if (enable) ensureCodeHook();
+	}
+
+	void SetCodeHook(CodeHookFunc hook) {
+		codeHookFunc = std::move(hook);
+		if (codeHookFunc) ensureCodeHook();
 	}
 
 	bool Step() {

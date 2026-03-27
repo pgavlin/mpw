@@ -345,6 +345,7 @@ void help()
 	printf(" --68k               force 68K execution (CODE resources)\n");
 	printf(" --memory-stats      print memory usage information\n");
 	printf(" --profile           generate callgrind profiling output\n");
+	printf(" --profile-cycles    use estimated PPC cycle counts (default: instruction count)\n");
 	printf(" --profile-output=F  set profile output filename\n");
 	printf(" --ram=<number>      set the ram size.  Default=16M\n");
 	printf(" --stack=<number>    set the stack size.  Default=8K\n");
@@ -674,6 +675,54 @@ static void RunPPC(int argc, char **argv, const std::string &command) {
 		}
 	}
 
+	// Set up profiler if requested
+	if (Flags.profile) {
+		// Collect symbol names from all loaded libraries and tool
+		std::map<std::string, uint32_t> symbols;
+		auto exportAddr = [](const PEFLoader::LoadResult &lr,
+		                     const PEFLoader::ExportedSymbolInfo &exp) -> uint32_t {
+			if (exp.sectionIndex < lr.sections.size())
+				return lr.sections[exp.sectionIndex].address + exp.offset;
+			return 0;
+		};
+		for (auto &kv : loadedLibs) {
+			for (auto &exp : kv.second.exports) {
+				uint32_t addr = exportAddr(kv.second, exp);
+				if (addr) symbols[kv.first + "::" + exp.name] = addr;
+			}
+		}
+		for (auto &exp : toolResult.exports) {
+			uint32_t addr = exportAddr(toolResult, exp);
+			if (addr) symbols[exp.name] = addr;
+		}
+		// Add CFM stub names
+		auto stubNames = CFMStubs::GetStubNames();
+		for (auto &kv : stubNames) {
+			symbols[kv.second] = kv.first;
+		}
+
+		uint32_t entryCode = memoryReadLong(toolResult.entryPoint);
+
+		profiler = new Profiler();
+		profiler->initializePPC(entryCode, symbols);
+
+		bool useCycles = Flags.profileCycles;
+		uint32_t prevPC = 0;
+		uint32_t prevInstr = 0;
+		bool first = true;
+
+		PPC::SetCodeHook([&](uint32_t pc, uint32_t instr) {
+			if (!first) {
+				uint32_t cost = useCycles ? Profiler::ppcEstimateCycles(prevInstr) : 1;
+				profiler->afterPPCInstruction(prevPC, cost);
+			}
+			profiler->beforePPCInstruction(pc, instr);
+			prevPC = pc;
+			prevInstr = instr;
+			first = false;
+		});
+	}
+
 	// Run tool entry point
 	if (toolResult.entryPoint) {
 		if (Flags.traceToolBox)
@@ -700,6 +749,15 @@ static void RunPPC(int argc, char **argv, const std::string &command) {
 		exit(EX_SOFTWARE);
 	}
 
+	// Write profiler output
+	if (profiler) {
+		std::string profileFile = Flags.profileOutput.empty()
+		                          ? "mpw.callgrind" : Flags.profileOutput;
+		profiler->writeOutput(profileFile);
+		delete profiler;
+		profiler = nullptr;
+	}
+
 	// Capture exit code from MPGM info+0x0E
 	uint32_t rv = MPW::ExitStatus();
 	if (rv > 0xff) rv = 0xff;
@@ -721,6 +779,7 @@ int main(int argc, char **argv)
 		kMemoryStats,
 		kProfile,
 		kProfileOutput,
+		kProfileCycles,
 		kShell,
 		kForcePPC,
 		kForce68K,
@@ -743,6 +802,7 @@ int main(int argc, char **argv)
 		{ "memory-stats", no_argument, NULL, kMemoryStats },
 		{ "profile", no_argument, NULL, kProfile },
 		{ "profile-output", required_argument, NULL, kProfileOutput },
+		{ "profile-cycles", no_argument, NULL, kProfileCycles },
 
 		{ "ppc", no_argument, NULL, kForcePPC },
 		{ "68k", no_argument, NULL, kForce68K },
@@ -792,6 +852,10 @@ int main(int argc, char **argv)
 
 			case kProfileOutput:
 				Flags.profileOutput = optarg;
+				break;
+
+			case kProfileCycles:
+				Flags.profileCycles = true;
 				break;
 
 			case kDebugger:

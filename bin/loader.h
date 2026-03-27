@@ -27,6 +27,7 @@ struct Settings {
 	bool memoryStats = false;
 
 	bool profile = false;
+	bool profileCycles = false;
 	std::string profileOutput;
 
 
