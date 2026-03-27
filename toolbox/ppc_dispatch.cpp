@@ -902,21 +902,36 @@ void RegisterStdCLibImports() {
 // FSYS Device Handlers — file I/O for PPC
 // ================================================================
 
+static uint32_t patchCookieForNative(uint32_t ioEntry);
+static void restoreCookie(uint32_t ioEntry, uint32_t cookie);
+
 static void fsys_faccess() {
 	// r3=name (C string ptr), r4=op, r5=parm
 	SetGPR(3, MPW::Native::Access(GetGPR(3), GetGPR(4), GetGPR(5)));
 }
 static void fsys_read() {
-	SetGPR(3, MPW::Native::Read(GetGPR(3)));
+	uint32_t ioEntry = GetGPR(3);
+	uint32_t saved = patchCookieForNative(ioEntry);
+	SetGPR(3, MPW::Native::Read(ioEntry));
+	restoreCookie(ioEntry, saved);
 }
 static void fsys_write() {
-	SetGPR(3, MPW::Native::Write(GetGPR(3)));
+	uint32_t ioEntry = GetGPR(3);
+	uint32_t saved = patchCookieForNative(ioEntry);
+	SetGPR(3, MPW::Native::Write(ioEntry));
+	restoreCookie(ioEntry, saved);
 }
 static void fsys_close() {
-	SetGPR(3, MPW::Native::Close(GetGPR(3)));
+	uint32_t ioEntry = GetGPR(3);
+	uint32_t saved = patchCookieForNative(ioEntry);
+	SetGPR(3, MPW::Native::Close(ioEntry));
+	restoreCookie(ioEntry, saved);
 }
 static void fsys_ioctl() {
-	SetGPR(3, MPW::Native::IOCtl(GetGPR(3), GetGPR(4), GetGPR(5)));
+	uint32_t ioEntry = GetGPR(3);
+	uint32_t saved = patchCookieForNative(ioEntry);
+	SetGPR(3, MPW::Native::IOCtl(ioEntry, GetGPR(4), GetGPR(5)));
+	restoreCookie(ioEntry, saved);
 }
 
 // ================================================================
@@ -944,6 +959,7 @@ static int cookieToFd(uint32_t cookieHandle) {
 
 static uint32_t allocateCookieHandle(int fdIndex); // forward decl
 static uint32_t ppcEconEntry = 0; // set by PatchDeviceTable
+static uint32_t ppcFsysEntry = 0; // set by PatchDeviceTable
 
 // Temporarily replace the Handle cookie with the raw fd for Native:: calls.
 // Returns the original cookie value for restoration.
@@ -964,75 +980,57 @@ static void econ_read() {
 	uint32_t ioEntry = GetGPR(3);
 	uint32_t cookie = memoryReadLong(ioEntry + 8);
 	int hostFd = cookieToFd(cookie);
+	uint32_t count = memoryReadLong(ioEntry + 12);
+	uint32_t buffer = memoryReadLong(ioEntry + 16);
 
-	if (hostFd >= 0 && hostFd <= 2) {
-		// Console fd: direct read
-		uint32_t count = memoryReadLong(ioEntry + 12);
-		uint32_t buffer = memoryReadLong(ioEntry + 16);
-		if (MPW::Trace)
-			fprintf(stderr, "  ECON read(fd=%d, count=%u)\n", hostFd, count);
+	if (MPW::Trace)
+		fprintf(stderr, "  ECON read(fd=%d, count=%u)\n", hostFd, count);
 
-		ssize_t n = ::read(hostFd, memoryPointer(buffer), count);
-		if (n < 0) {
-			memoryWriteWord(0xFFFF, ioEntry + 2);
-			memoryWriteLong(0, ioEntry + 12);
-		} else {
-			memoryWriteWord(0, ioEntry + 2);
-			memoryWriteLong(count - (uint32_t)n, ioEntry + 12);
-		}
-		SetGPR(3, n < 0 ? (uint32_t)-1 : 0);
+	ssize_t n = ::read(hostFd, memoryPointer(buffer), count);
+	if (n < 0) {
+		memoryWriteWord(0xFFFF, ioEntry + 2);
+		memoryWriteLong(0, ioEntry + 12);
 	} else {
-		// File fd: patch cookie to raw fd for Native handler
-		uint32_t saved = patchCookieForNative(ioEntry);
-		SetGPR(3, MPW::Native::Read(ioEntry));
-		restoreCookie(ioEntry, saved);
+		memoryWriteWord(0, ioEntry + 2);
+		memoryWriteLong(count - (uint32_t)n, ioEntry + 12);
 	}
+	SetGPR(3, n < 0 ? (uint32_t)-1 : 0);
 }
 
 static void econ_write() {
 	uint32_t ioEntry = GetGPR(3);
 	uint32_t cookie = memoryReadLong(ioEntry + 8);
 	int hostFd = cookieToFd(cookie);
+	uint32_t count = memoryReadLong(ioEntry + 12);
+	uint32_t buffer = memoryReadLong(ioEntry + 16);
 
-	if (hostFd >= 0 && hostFd <= 2) {
-		// Console fd: direct write with CR→LF conversion
-		uint32_t count = memoryReadLong(ioEntry + 12);
-		uint32_t buffer = memoryReadLong(ioEntry + 16);
-		if (MPW::Trace)
-			fprintf(stderr, "  ECON write(fd=%d, count=%u, buf=\"%.*s\")\n",
-			        hostFd, count, std::min(count, 40u),
-			        (const char *)memoryPointer(buffer));
+	if (MPW::Trace)
+		fprintf(stderr, "  ECON write(fd=%d, count=%u, buf=\"%.*s\")\n",
+		        hostFd, count, std::min(count, 40u),
+		        (const char *)memoryPointer(buffer));
 
-		uint8_t *ptr = memoryPointer(buffer);
-		std::vector<uint8_t> converted;
-		for (uint32_t i = 0; i < count; i++) {
-			uint8_t c = ptr[i];
-			converted.push_back(c == '\r' ? '\n' : c);
-		}
-
-		ssize_t n = ::write(hostFd, converted.data(), converted.size());
-		if (n < 0) {
-			memoryWriteWord(0xFFFF, ioEntry + 2);
-			memoryWriteLong(0, ioEntry + 12);
-		} else {
-			memoryWriteWord(0, ioEntry + 2);
-			memoryWriteLong(count - (uint32_t)n, ioEntry + 12);
-		}
-		SetGPR(3, n < 0 ? (uint32_t)-1 : 0);
-	} else {
-		// File fd: patch cookie to raw fd for Native handler
-		uint32_t saved = patchCookieForNative(ioEntry);
-		SetGPR(3, MPW::Native::Write(ioEntry));
-		restoreCookie(ioEntry, saved);
+	// CR→LF conversion for console output
+	uint8_t *ptr = memoryPointer(buffer);
+	std::vector<uint8_t> converted;
+	for (uint32_t i = 0; i < count; i++) {
+		uint8_t c = ptr[i];
+		converted.push_back(c == '\r' ? '\n' : c);
 	}
+
+	ssize_t n = ::write(hostFd, converted.data(), converted.size());
+	if (n < 0) {
+		memoryWriteWord(0xFFFF, ioEntry + 2);
+		memoryWriteLong(0, ioEntry + 12);
+	} else {
+		memoryWriteWord(0, ioEntry + 2);
+		memoryWriteLong(count - (uint32_t)n, ioEntry + 12);
+	}
+	SetGPR(3, n < 0 ? (uint32_t)-1 : 0);
 }
 
 static void econ_close() {
 	if (MPW::Trace) fprintf(stderr, "  ECON close()\n");
-	uint32_t ioEntry = GetGPR(3);
-	uint32_t saved = patchCookieForNative(ioEntry);
-	SetGPR(3, MPW::Native::Close(ioEntry));
-	restoreCookie(ioEntry, saved);
+	SetGPR(3, 0); // no-op for console fds
 }
 
 static void econ_ioctl() {
@@ -1093,8 +1091,8 @@ static void econ_faccess() {
 			memoryWriteLong(cookieHandle, parm + 8);
 			cookieFdMap[cookieHandle] = rawFd;
 		}
-		// Set device pointer so _coRead/_coWrite can find handlers
-		memoryWriteLong(ppcEconEntry, parm + 4);
+		// Set device pointer to FSYS so _coRead/_coWrite use file handlers
+		memoryWriteLong(ppcFsysEntry, parm + 4);
 	}
 
 	SetGPR(3, d0);
@@ -1131,6 +1129,7 @@ void PatchDeviceTable(uint32_t mpgmInfoAddr) {
 		uint32_t fsysIoctl   = CFMStubs::RegisterStub("_FSYS", "ioctl", fsys_ioctl);
 
 		uint32_t fsysEntry = devTablePtr + 0;
+		ppcFsysEntry = fsysEntry;
 		// 'FSYS' name already written by MPW::Init()
 		memoryWriteLong(fsysFaccess, fsysEntry + 4);
 		memoryWriteLong(fsysClose, fsysEntry + 8);
