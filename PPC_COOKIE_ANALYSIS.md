@@ -72,14 +72,30 @@ memoryWriteLong(cookieData, cookieHandle);  // *Handle = pointer to data
 memoryWriteLong(cookieHandle, ioEntry + 8);
 ```
 
-## Open Question
+## Resolved: Cookie Data Layout
 
-What exactly goes at cookie+0x00 and cookie+0x04? The FIODUPFD path reads `*(cookie+0x00)` and compares to -0x7FF8 (sentinel for "no device"). If it's NOT -0x7FF8, it passes the value to a device resolver. The "not connected" write path reads `*(cookie+0x04)` similarly.
+Traced via `_getIOPort` (0x973C) disassembly and `--trace-cpu` validation:
 
-Most likely the cookie data is:
 ```
-+0x00: uint32  — pointer? or 4CC device type tag?
-+0x04: C string — device name (e.g., "ECON")
++0x00: int32  — fd index (used by FIODUPFD path via _getIOPort)
+                 or -0x7FF8 (0xFFFF8008) sentinel = "no device assigned"
++0x04: int32  — fd index (used by _coWrite path via _getIOPort)
+                 or -0x7FF8 sentinel
++0x0C: uint8  — connected flag (0 = not connected, non-zero = connected)
 ```
 
-This should be verified by checking what `MPW::Init()` creates for the 68K path and what the device resolver function at 0x8EFC expects.
+`_getIOPort` reads the fd index, multiplies by 20 (ioEntry size), indexes into the IO table at `_IntEnv+0x1C`, validates that the entry's flags are non-zero (fd is open), and returns the ioEntry pointer.
+
+## Validated via --trace-cpu
+
+- `_coIoctl` and `_coWrite` are NEVER called during Hello execution
+- StdCLib's IO init (section offset 0xA908) wraps ECON handlers in NewRoutineDescriptor but does NOT call FIOINTERACTIVE/FIOBUFSIZE during init
+- fprintf silently fails: the bare fd cookie (value 1) is not a valid Handle, HLock(1) fails, `*(1)+0xC` reads garbage, `_coWrite` either takes a wrong path or returns EBADF
+- No output is produced because the FILE buffer is never flushed to the host
+
+## Fix
+
+Allocate a Handle for each stdio cookie. The Handle's master pointer should point to a cookie data block with:
+- `+0x00`: fd index (0 for stdin, 1 for stdout, 2 for stderr)
+- `+0x04`: fd index (same value)
+- `+0x0C`: 0 (not connected initially — StdCLib will connect via FIODUPFD)
