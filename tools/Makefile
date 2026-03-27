@@ -22,6 +22,10 @@ Hello: Hello.c.o
 	rm -f $@
 	$(PPCLink) $< $(SHARED_LIBS) $(PPC_LIBS) -t MPST -c 'MPS ' -o $@
 
+sha256.o: sha256.c
+	rm -f $@
+	$(MrC) -p -w off -opt speed -d TARGET_CPU=68000 sha256.c -o sha256.o
+
 %.c.o: %.c
 	$(MrC) $< $(COPTS) -o $@
 
