@@ -2,7 +2,9 @@
 
 **Goal:** Implement InterfaceLib wrappers for symbols that PPC tools (other than StdCLib) import directly.
 
-**Depends on:** Phases 5-6 (end-to-end execution to discover which additional stubs are needed).
+**Depends on:** Phases 5-7 (Hello, world! runs end-to-end).
+
+**Status:** Not started. Hello tool works with the 66 StdCLib imports from Phase 4. Additional wrappers will be needed as more complex tools are tested.
 
 ---
 
@@ -15,6 +17,32 @@ PPC FATAL: unimplemented stub InterfaceLib::SomeFunction called
 ```
 
 This phase is demand-driven — add wrappers as tools require them. Use `--debug` to set breakpoints and inspect state when a missing stub fires.
+
+---
+
+## Current State
+
+The Hello tool imports 10 symbols from StdCLib (fprintf, exit, __setjmp, _BreakPoint, _IntEnv, __C_phase, __target_for_exit, _exit_status, _iob, __NubAt3), all of which are resolved via StdCLib's exports. StdCLib in turn imports 66 symbols from InterfaceLib/MathLib/PrivateInterfaceLib, all implemented in Phase 4.
+
+More complex tools (compilers, linkers, DumpPEF, etc.) will import directly from InterfaceLib. Use `mpw DumpPEF -do All -pi u -a -fmt on <tool>` to see what a tool needs before running it.
+
+---
+
+## Known Working Infrastructure
+
+These subsystems are validated end-to-end and can be built upon:
+
+| Subsystem | Status |
+|-----------|--------|
+| PPC CPU (Unicorn) | Working. MSR[FP]=1 for FP instructions. |
+| PEF loader | Working. pidata decompression, full relocation engine. |
+| CFM stubs (sc dispatch) | Working. On-demand library loading. |
+| Memory Manager (NewPtr/NewHandle/HLock/etc.) | Working. Note: PPC SP must be in stack area, not pool area. |
+| ECON device handlers | Working. read/write/close/ioctl/faccess. |
+| Handle-based cookies | Working. Proper NewHandle allocation. |
+| CallUniversalProc trampoline | Working. PPC TVector dispatch. |
+| Interactive debugger | Working. PPC step/break/registers/disassembly. |
+| pef_inspect tool | Working. Structural queries on PEF binaries. |
 
 ---
 
@@ -86,10 +114,16 @@ namespace PPCDispatch {
 }
 ```
 
-`RegisterToolImports()` is called after `RegisterStdCLibImports()` in the Phase 5 loader. Any symbol already registered by Phase 4 is skipped (RegisterStub returns the existing TVector).
+`RegisterToolImports()` is called after `RegisterStdCLibImports()` in the loader. Any symbol already registered by Phase 4 is skipped (RegisterStub returns the existing TVector).
 
 ---
 
 ## Validation
 
 Run various PPC MPW tools and verify no catch-all stubs fire. Add wrappers incrementally as needed.
+
+### Test progression
+1. Simple tools (Hello — done ✓)
+2. DumpPEF (PPC version, if available)
+3. Compilers (SC, MrC)
+4. Linkers (PPCLink)

@@ -4,6 +4,8 @@
 
 **Depends on:** Phase 6 (ECON device handlers).
 
+**Status:** COMPLETE — Hello, world! prints correctly with exit status 0.
+
 ---
 
 ## Diagnostic Toolkit
@@ -19,6 +21,7 @@
 | Unresolved stub handler | (automatic) | Catch-all that logs and halts on unimplemented calls |
 | Annotated disassembly | `dump-pef-stdclib`, `dump-pef-hello` | Pre-annotated DumpPEF output for key functions |
 | `DumpPEF` | (external) | `mpw DumpPEF -do All -pi u -a -fmt on <path>` |
+| `lldb` | (external) | For host-side crashes (mplite, Unicorn, etc.) |
 
 ---
 
@@ -38,48 +41,32 @@ Confirmed via debugger: `exit()` → `_RTExit` → `_DoExitProcs` → dispose ro
 
 StdCLib's `shared_init_helper` writes `&_IntEnv` into `info+0x24`. `_RTInit` writes `&__target_for_exit` into the cell at `*(_IntEnv+0x16)`. We do NOT need to set up the exit chain externally. See `PPC_STDCLIB_INIT.md`.
 
----
+### PPC Stack Corrupting mplite Metadata (RESOLVED)
 
-## Likely Phase 6 Issues
+**Root cause:** The PPC stack pointer was initialized to `memorySize - stackSize - 64` (0xFF7FC0), placing it at the boundary between the mplite pool and the stack area. mplite's `aCtrl` metadata array is stored at the tail of the pool buffer (emulated addresses 0xF7C9A0–0xFF7FED). The stack area starts at 0xFF8000, leaving only 19 bytes gap. Any PPC stack frame growth (SP going below 0xFF7FED) immediately corrupted `aCtrl`, causing `mplite_unlink` assertion failures on subsequent `NewPtr` calls.
 
-### stdout Not Line-Buffered
+**Diagnosed using:** `lldb` breakpoint on `__assert_rtn`, then computing:
+- `aCtrl = zPool + nBlock * szAtom` (within the emulated memory buffer)
+- Pool buffer = `memory + globals` to `memory + memorySize - stack`
+- `nBlock = poolSize / (szAtom + 1)` = 505421 (szAtom=32)
+- `aCtrl` starts at emulated addr 0xF7C9A0, ends at 0xFF7FED
+- Initial PPC SP at 0xFF7FC0 was already 45 bytes inside `aCtrl`
 
-**Symptom:** Tool exits cleanly but no output.
+**Fix:** Set PPC SP to `memorySize - 64` (top of the actual stack area, 0xFFFFB0). The stack area is the last `stackSize` bytes of memory and is excluded from the mplite pool. Committed in `adc25708`.
 
-**Diagnosis:**
-1. Check `--trace-mpw` for ECON ioctl calls during StdCLib init
-2. Verify FIOINTERACTIVE returns 0 for stdout
-3. Use debugger to inspect stdout FILE flags after init:
-   ```
-   ] p *($stdout_addr + 0x12)
-   ```
-4. Use `pef_inspect` to find stdout address: `sym stdout`
+### Handle-Based Cookies (RESOLVED)
 
-**Possible fixes:**
-- Cookie `connected` flag (byte +0x0C) must be 1
-- Cookie `mode` byte (+0x00) must match direction (0x02 for stdout)
+`allocateCookieHandle` initially simulated handles via two `NewPtr` calls. Changed to use `MM::Native::NewHandle` which properly registers with the Handle system (needed for StdCLib's `HLock`/`HUnlock` calls on cookies).
 
-### CallUniversalProc Trampoline Bugs
+### ECON Device Handlers (RESOLVED)
 
-**Symptom:** StdCLib init hangs or crashes when calling ECON device handlers via CallUniversalProc.
-
-**Diagnosis:**
-1. Use `--debug` to break at CallUniversalProc entry
-2. Check if the PPC TVector path or 68K descriptor path is taken
-3. Verify arg shifting: r5→r3, r6→r4, etc.
-
-### Missing Stubs
-
-**Symptom:** `PPC FATAL: unimplemented stub` message.
-
-**Fix:** Add the stub to `ppc_dispatch.cpp`.
+All five ECON handlers work: `econ_read`, `econ_write`, `econ_close`, `econ_ioctl`, `econ_faccess`. StdCLib calls FIODUPFD (3x, one per stdio fd) and FIOBUFSIZE (1x, for stdout) during init. The `_coWrite` path resolves the device handler via `_getIOPort` when the cookie is not connected, and calls `econ_write` via `CallUniversalProc`.
 
 ---
 
-## Validation
+## Validation (all passing)
 
-Phase 7 is complete when:
-1. `./bin/mpw --ppc tools/Hello` prints "Hello, world!" and exits 0
-2. No crashes, hangs, or infinite loops
-3. `--trace-mpw` shows ECON write with the output data
-4. 68K tools still work
+1. `./bin/mpw --ppc tools/Hello` prints "Hello, world!" and exits 0 ✓
+2. No crashes, hangs, or infinite loops ✓
+3. `--trace-mpw` shows ECON write with the output data ✓
+4. 68K tools still work (`DumpPEF`, etc.) ✓
