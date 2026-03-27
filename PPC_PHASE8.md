@@ -2,27 +2,23 @@
 
 **Goal:** Implement InterfaceLib wrappers for symbols that PPC tools (other than StdCLib) import directly.
 
-**Depends on:** Phase 4 (StdCLib wrappers), Phases 5-6 (end-to-end execution to discover which additional stubs are needed).
+**Depends on:** Phases 5-6 (end-to-end execution to discover which additional stubs are needed).
 
 ---
 
 ## Overview
 
-Phase 4 implements exactly the 66 symbols StdCLib imports. When we begin running actual PPC tools in Phases 5-6, those tools may import additional symbols from InterfaceLib directly (not via StdCLib). This phase adds those wrappers as needed.
-
-The catch-all handler from Phase 4 will identify missing stubs at runtime:
+Phase 4 implements exactly the 66 symbols StdCLib imports. PPC tools may import additional symbols from InterfaceLib directly. The catch-all handler identifies missing stubs at runtime:
 ```
 PPC FATAL: unimplemented stub InterfaceLib::SomeFunction called
   r3=0x... r4=0x... r5=0x... LR=0x...
 ```
 
-This phase is demand-driven — we add wrappers as tools require them.
+This phase is demand-driven — add wrappers as tools require them. Use `--debug` to set breakpoints and inspect state when a missing stub fires.
 
 ---
 
 ## Likely Additional Symbols
-
-Based on the old `ppc-dead-end` branch and common MPW tool patterns, tools may import:
 
 ### Memory Manager extras
 
@@ -79,7 +75,7 @@ Based on the old `ppc-dead-end` branch and common MPW tool patterns, tools may i
 
 ---
 
-## Implementation Approach
+## Implementation
 
 Add wrappers to `toolbox/ppc_dispatch.cpp` as a new registration function:
 
