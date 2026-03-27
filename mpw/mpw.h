@@ -120,6 +120,15 @@ namespace MPW {
 	void ftrap_write(uint16_t trap);
 	void ftrap_ioctl(uint16_t trap);
 
+	// Native versions for PPC: take emulated memory addresses, return D0 value.
+	namespace Native {
+		uint32_t Access(uint32_t name, uint32_t op, uint32_t parm);
+		uint32_t Read(uint32_t parm);
+		uint32_t Write(uint32_t parm);
+		uint32_t Close(uint32_t parm);
+		uint32_t IOCtl(uint32_t parm, uint32_t cmd, uint32_t arg);
+	}
+
 }
 
 #endif

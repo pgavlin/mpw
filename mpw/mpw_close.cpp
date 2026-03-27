@@ -47,82 +47,40 @@ namespace MPW
 {
 
 
-	void ftrap_close(uint16_t trap)
-	{
-		// returns an mpw_errno
-		// close actually checks the error in the File Entry and converts that to unix.
-		// (sigh)
-
-		uint32_t d0 = 0;
-
-		uint32_t sp = cpuGetAReg(7);
-		uint32_t parm  = memoryReadLong(sp + 4);
-
-		MPWFile f;
-
-		f.flags = memoryReadWord(parm);
-		f.error = memoryReadWord(parm + 2);
-		f.device = memoryReadLong(parm + 4);
-		f.cookie = memoryReadLong(parm + 8);
-		f.count = memoryReadLong(parm + 12);
-		f.buffer = memoryReadLong(parm + 16);
-
-
-		Log("%04x Close(%08x)\n", trap, parm);
-
-		if (!parm)
+	namespace Native {
+		uint32_t Close(uint32_t parm)
 		{
-			cpuSetDReg(0, kEINVAL);
-			return;
-		}
+			if (!parm) return kEINVAL;
 
+			MPWFile f;
+			f.cookie = memoryReadLong(parm + 8);
 
-		int fd = f.cookie;
+			uint32_t d0 = 0;
+			int fd = f.cookie;
 
-		int rv = OS::Internal::FDEntry::close(fd);
-
-		if (rv < 0)
-		{
-			f.error = MacOS::notOpenErr;
-			d0 = kEINVAL;
-		}
-		else
-		{
-			f.error = 0;
-			d0 = 0;
-		}
-
-
-#if 0
-		if (fd < 0 || fd >= OS::Internal::FDTable.size())
-		{
-			f.error = OS::notOpenErr;
-			d0 = kEINVAL;
-		}
-		else
-		{
-			auto &e = OS::Internal::FDTable[fd];
-			if (e.refcount == 0)
+			int rv = OS::Internal::FDEntry::close(fd);
+			if (rv < 0)
 			{
-				f.error = OS::notOpenErr;
+				f.error = MacOS::notOpenErr;
 				d0 = kEINVAL;
 			}
 			else
 			{
-				if (--e.refcount == 0)
-				{
-					Log("     close(%02x)\n", fd);
-					::close(fd);
-				}
 				f.error = 0;
 				d0 = 0;
 			}
-		}
-#endif
 
-		memoryWriteWord(f.error, parm + 2);
-		cpuSetDReg(0, 0);
+			memoryWriteWord(f.error, parm + 2);
+			return d0;
+		}
 	}
 
+	void ftrap_close(uint16_t trap)
+	{
+		uint32_t sp = cpuGetAReg(7);
+		uint32_t parm = memoryReadLong(sp + 4);
+		Log("%04x Close(%08x)\n", trap, parm);
+		cpuSetDReg(0, Native::Close(parm));
+	}
 
 }

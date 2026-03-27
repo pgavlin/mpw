@@ -389,58 +389,60 @@ namespace MPW
 	}
 
 
+	namespace Native {
+		uint32_t IOCtl(uint32_t parm, uint32_t cmd, uint32_t arg)
+		{
+			uint32_t d0;
+
+			switch (cmd)
+			{
+				case kFIOLSEEK:
+					d0 = ftrap_lseek(parm, arg);
+					break;
+
+				case kFIODUPFD:
+					d0 = ftrap_dup(parm, arg);
+					break;
+
+				case kFIOBUFSIZE:
+					d0 = ftrap_bufsize(parm, arg);
+					break;
+
+				case kFIOINTERACTIVE:
+					d0 = ftrap_interactive(parm, arg);
+					break;
+
+				case kFIOFNAME:
+					d0 = ftrap_fname(parm, arg);
+					break;
+
+				case kFIOREFNUM:
+					d0 = ftrap_refnum(parm, arg);
+					break;
+
+				case kFIOSETEOF:
+					d0 = ftrap_seteof(parm, arg);
+					break;
+
+				default:
+					fprintf(stderr, "ioctl - unsupported op %04x\n", cmd);
+					d0 = 0x40000000 | kEINVAL;
+					break;
+			}
+
+			return d0;
+		}
+	}
+
 	void ftrap_ioctl(uint16_t trap)
 	{
-		// returns an mpw_errno in d0 [???]
-
-		// int ioctl(int fildes, unsigned int cmd, long *arg);
-		uint32_t d0;
 		uint32_t sp = cpuGetAReg(7);
-
-		uint32_t fd = memoryReadLong(sp + 4);
+		uint32_t parm = memoryReadLong(sp + 4);
 		uint32_t cmd = memoryReadLong(sp + 8);
 		uint32_t arg = memoryReadLong(sp + 12);
 
-		Log("%04x IOCtl(%08x, %08x, %08x)\n", trap, fd, cmd, arg);
-
-		switch (cmd)
-		{
-			case kFIOLSEEK:
-				d0 = ftrap_lseek(fd, arg);
-				break;
-
-			case kFIODUPFD:
-				d0 = ftrap_dup(fd, arg);
-				break;
-
-			case kFIOBUFSIZE:
-				d0 = ftrap_bufsize(fd, arg);
-				break;
-
-			case kFIOINTERACTIVE:
-				d0 = ftrap_interactive(fd, arg);
-				break;
-
-			case kFIOFNAME:
-				d0 = ftrap_fname(fd, arg);
-				break;
-
-			case kFIOREFNUM:
-				d0 = ftrap_refnum(fd, arg);
-				break;
-
-			case kFIOSETEOF:
-				d0 = ftrap_seteof(fd, arg);
-				break;
-
-			default:
-				fprintf(stderr, "ioctl - unsupported op %04x\n", cmd);
-				exit(1);
-				break;
-		}
-
-		cpuSetDReg(0, d0);
+		Log("%04x IOCtl(%08x, %08x, %08x)\n", trap, parm, cmd, arg);
+		cpuSetDReg(0, Native::IOCtl(parm, cmd, arg));
 	}
-
 
 }

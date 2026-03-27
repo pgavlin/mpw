@@ -301,62 +301,60 @@ namespace MPW
 	}
 
 
+	namespace Native {
+		uint32_t Access(uint32_t name, uint32_t op, uint32_t parm)
+		{
+			uint32_t d0;
+
+			switch (op)
+			{
+			case kF_OPEN:
+				d0 = ftrap_open(name, parm);
+				break;
+
+			case kF_DELETE:
+				d0 = ftrap_delete(name);
+				break;
+
+			case kF_RENAME:
+				d0 = ftrap_rename(name, parm);
+				break;
+
+			case kF_GTABINFO:
+				d0 = ftrap_get_tab_info(name, parm);
+				break;
+
+			case kF_STABINFO:
+				d0 = ftrap_set_tab_info(name, parm);
+				break;
+
+			case kF_GFONTINFO:
+				d0 = ftrap_get_font_info(name, parm);
+				break;
+
+			case kF_SFONTINFO:
+				d0 = ftrap_set_font_info(name, parm);
+				break;
+
+			default:
+				d0 = 0x40000000 | kEINVAL;
+				fprintf(stderr, "faccess - unsupported op %04x\n", op);
+				break;
+			}
+
+			return d0;
+		}
+	}
+
 	void ftrap_access(uint16_t trap)
 	{
-		// open a file, rename a file, or delete a file.
-		std::string sname;
-		uint32_t d0;
-
 		uint32_t sp = cpuGetAReg(7);
-
-		// hmmm not sure if 3 or 4 parameters.
-
 		uint32_t name = memoryReadLong(sp + 4);
 		uint32_t op = memoryReadLong(sp + 8);
 		uint32_t parm = memoryReadLong(sp + 12);
 
 		Log("%04x Access(%08x, %04x, %08x)\n", trap, name, op, parm);
-
-		switch (op)
-		{
-		case kF_OPEN:
-			d0 = ftrap_open(name, parm);
-			break;
-
-		case kF_DELETE:
-			d0 = ftrap_delete(name);
-			break;
-
-		case kF_RENAME:
-			d0 = ftrap_rename(name, parm);
-			break;
-
-		case kF_GTABINFO:
-			d0 = ftrap_get_tab_info(name, parm);
-			break;
-
-		case kF_STABINFO:
-			d0 = ftrap_set_tab_info(name, parm);
-			break;
-
-		case kF_GFONTINFO:
-			d0 = ftrap_get_font_info(name, parm);
-			break;
-
-		case kF_SFONTINFO:
-			d0 = ftrap_set_font_info(name, parm);
-			break;
-
-
-		default:
-			d0 = 0x40000000 | kEINVAL;
-			fprintf(stderr, "faccess - unsupported op %04x\n", op);
-			exit(1);
-		}
-
-		cpuSetDReg(0, d0);
+		cpuSetDReg(0, Native::Access(name, op, parm));
 	}
-
-
 
 }
