@@ -121,6 +121,12 @@ namespace PPC {
 		                  (void *)interruptHook, nullptr, 1, 0);
 		checkErr(err, "uc_hook_add(INTR)");
 
+		// Enable FP in MSR — without this, any floating-point instruction
+		// triggers a Floating Point Unavailable exception, which our
+		// interrupt hook misinterprets as an sc call.
+		uint32_t msr = 0x2000; // MSR[FP] = 1
+		uc_reg_write(uc, UC_PPC_REG_MSR, &msr);
+
 		// Initialize Capstone for PPC disassembly
 		if (!capstone) {
 			cs_open(CS_ARCH_PPC, CS_MODE_BIG_ENDIAN, &capstone);
