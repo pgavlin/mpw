@@ -958,26 +958,24 @@ namespace OS
 
 	uint16_t Microseconds(uint16_t trap)
 	{
+		// Microseconds returns a 64-bit value in A0 (high) and D0 (low).
+		// The trap is used with FOURWORDINLINE(0xA193, 0x225F, 0x22C8, 0x2280):
+		//   A193         Microseconds trap
+		//   225F         MOVEA.L (A7)+, A1    ; pop output pointer
+		//   22C8         MOVE.L A0, (A1)+     ; store high word
+		//   2280         MOVE.L D0, (A1)      ; store low word
+		//
+		// The trap itself must NOT pop the stack or write to memory —
+		// the inline code handles that. Just return the value in A0:D0.
 
-		// UnsignedWide is a uint64_t
-		// Microseconds(UnsignedWide * microTickCount)
-		// FOURWORDINLINE(0xA193, 0x225F, 0x22C8, 0x2280);
-
-
-		uint32_t microTickCount;
-		StackFrame<4>(microTickCount);
-
-		Log("%04x %s(%08x)\n", trap, __func__, microTickCount);
+		Log("%04x %s()\n", trap, __func__);
 
 		auto now = std::chrono::steady_clock::now();
 
 		uint64_t t = std::chrono::duration_cast< std::chrono::microseconds >(now - BootTime).count();
 
-		if (microTickCount)
-			memoryWriteLongLong(t, microTickCount);
-
-
-		return 0;
+		cpuSetAReg(0, (uint32_t)(t >> 32));
+		return (uint32_t)(t & 0xFFFFFFFF);
 	}
 
 
