@@ -29,6 +29,7 @@ endif()
 include_directories("${CMAKE_SOURCE_DIR}")
 
 include(FindPkgConfig)
+pkg_check_modules(UNICORN REQUIRED unicorn)
 pkg_check_modules(CAPSTONE REQUIRED capstone)
 
 add_subdirectory(bin)
