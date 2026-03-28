@@ -431,13 +431,44 @@ def find_hfs_partition(data):
     return None
 
 
-def open_hfs_image(data):
+def _read_appledouble_rsrc(path):
+    """Read resource fork from an AppleDouble sidecar file (._name)."""
+    directory = os.path.dirname(path)
+    basename = os.path.basename(path)
+    sidecar = os.path.join(directory, '._' + basename)
+    if not os.path.exists(sidecar):
+        return b''
+    with open(sidecar, 'rb') as f:
+        ad = f.read()
+    if len(ad) < 26:
+        return b''
+    magic = struct.unpack('>I', ad[0:4])[0]
+    if magic != 0x00051607:
+        return b''
+    num_entries = struct.unpack('>H', ad[24:26])[0]
+    for i in range(num_entries):
+        base = 26 + i * 12
+        if base + 12 > len(ad):
+            break
+        eid = struct.unpack('>I', ad[base:base + 4])[0]
+        eoff = struct.unpack('>I', ad[base + 4:base + 8])[0]
+        elen = struct.unpack('>I', ad[base + 8:base + 12])[0]
+        if eid == 2 and eoff + elen <= len(ad):  # resource fork
+            return ad[eoff:eoff + elen]
+    return b''
+
+
+def open_hfs_image(data, image_path=None):
     """Detect format and return an HFSVolume."""
     # Try MacBinary unwrap first
     rsrc_fork = b''
     result = unwrap_macbinary(data)
     if result is not None:
         data, rsrc_fork = result
+
+    # Try AppleDouble sidecar for resource fork
+    if not rsrc_fork and image_path:
+        rsrc_fork = _read_appledouble_rsrc(image_path)
 
     # Try direct HFS at offset 0
     if len(data) > 1024 + 2:
@@ -767,7 +798,7 @@ def main():
         with open(image_path, 'rb') as f:
             data = f.read()
 
-        vol = open_hfs_image(data)
+        vol = open_hfs_image(data, image_path)
         print(f"  Volume: {vol.vol_name}")
         print(f"  Alloc block size: {vol.alloc_block_size}, "
               f"count: {vol.num_alloc_blocks}")
