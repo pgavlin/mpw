@@ -723,6 +723,7 @@ void RegisterStdCLibImports() {
 
 	// -- Memory Manager misc (4) --
 	reg("InterfaceLib", "BlockMove", wrap_BlockMove);
+	reg("InterfaceLib", "BlockMoveData", wrap_BlockMove);
 	reg("InterfaceLib", "FreeMem", wrap_FreeMem);
 	reg("InterfaceLib", "MemError", wrap_MemError);
 	reg("InterfaceLib", "GetZone", wrap_GetZone);
