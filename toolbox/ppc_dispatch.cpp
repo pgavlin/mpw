@@ -83,6 +83,12 @@ static void wrap_NewPtr() {
 	SetGPR(3, ptr);
 }
 
+static void wrap_NewPtrClear() {
+	uint32_t ptr = 0;
+	MM::Native::NewPtr(GetGPR(3), true, ptr);
+	SetGPR(3, ptr);
+}
+
 static void wrap_DisposePtr() {
 	MM::Native::DisposePtr(GetGPR(3));
 }
@@ -706,6 +712,7 @@ namespace PPCDispatch {
 void RegisterStdCLibImports() {
 	// -- Memory Manager (8) --
 	reg("InterfaceLib", "NewPtr", wrap_NewPtr);
+	reg("InterfaceLib", "NewPtrClear", wrap_NewPtrClear);
 	reg("InterfaceLib", "DisposePtr", wrap_DisposePtr);
 	reg("InterfaceLib", "GetPtrSize", wrap_GetPtrSize);
 	reg("InterfaceLib", "SetPtrSize", wrap_SetPtrSize);
