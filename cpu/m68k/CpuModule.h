@@ -82,6 +82,15 @@ extern BOOLE cpuSetIrqLevel(uint32_t irq_level);
 extern uint32_t cpuGetIrqLevel(void);
 
 extern uint32_t cpuExecuteInstruction(void);
+extern void cpuEnableBatchMode(void);
+extern void cpuDisableBatchMode(void);
+
+#ifdef __cplusplus
+extern bool cpuRunBatch(void);
+#else
+extern _Bool cpuRunBatch(void);
+#endif
+
 extern uint32_t cpuDisOpcode(uint32_t disasm_pc, char *saddress, char *sdata, char *sinstruction, char *soperands);
 
 extern void cpuSaveState(FILE *F);

@@ -66,20 +66,13 @@ static void checkErr(uc_err err, const char *context) {
 // Exception Hook
 // ================================================================
 
-// Hook for A-line and F-line exception handler stubs.
-// When the CPU vectors to our handler address, we intercept here,
-// read the trap opcode from the stacked PC, dispatch to the callback,
-// and return from exception by adjusting the stack.
-static void exceptionHook(uc_engine *uc_, uint64_t address,
-                          uint32_t size, void *user_data) {
-	(void)user_data;
-	(void)size;
-
-	// On a 68000/010 exception, the CPU pushes [SR, PC] onto the supervisor stack.
-	// On 68020+, it pushes [SR, PC, format/vector word].
-	// Read the stacked PC to find the instruction after the trap.
+// Dispatch an A-line or F-line trap from a CPU exception frame.
+// The CPU has vectored to handlerAddr, pushing [SR, PC, ...] onto A7.
+// This unwinds the frame, calls the trap handler, and restores state.
+// Returns true if a handler was called.
+static bool dispatchTrapFromExceptionFrame(uint32_t handlerAddr) {
 	uint32_t sp = 0;
-	uc_reg_read(uc_, UC_M68K_REG_A7, &sp);
+	uc_reg_read(uc, UC_M68K_REG_A7, &sp);
 
 	// Stack frame: [SR(16-bit), PC(32-bit), ...]
 	// For 68020+ format 0: [SR(16), PC(32), format/vector(16)]
@@ -90,46 +83,56 @@ static void exceptionHook(uc_engine *uc_, uint64_t address,
 	uint16_t opcode = (Memory[stackedPC - 2] << 8) | Memory[stackedPC - 1];
 
 	cpuLineExceptionFunc handler = nullptr;
-	if ((uint32_t)address == kALineHandlerAddr && alineFunc) {
+	if (handlerAddr == kALineHandlerAddr && alineFunc) {
 		handler = alineFunc;
-	} else if ((uint32_t)address == kFLineHandlerAddr && flineFunc) {
+	} else if (handlerAddr == kFLineHandlerAddr && flineFunc) {
 		handler = flineFunc;
 	}
 
-	if (handler) {
-		// Set PC to stackedPC (after the trap instruction) so the callback
-		// sees the same state as with the WinFellow core.
-		uc_reg_write(uc_, UC_M68K_REG_PC, &stackedPC);
+	if (!handler) return false;
 
-		handler(opcode);
+	// Set PC to stackedPC (after the trap instruction) so the callback
+	// sees the same state as with the WinFellow core.
+	uc_reg_write(uc, UC_M68K_REG_PC, &stackedPC);
 
-		// Read potentially-modified PC (callback may have changed it)
-		uint32_t newPC = 0;
-		uc_reg_read(uc_, UC_M68K_REG_PC, &newPC);
+	handler(opcode);
 
-		// Pop the exception frame: restore SR, set PC, adjust SP.
-		// For 68000/010 (format 0): frame = 6 bytes (SR + PC)
-		// For 68020+ (format 2): frame = 8 bytes (SR + PC + format/vector)
-		uint16_t sr = (Memory[sp] << 8) | Memory[sp + 1];
-		uint32_t frameSize;
-		if (cpuModelMajor >= 2) {
-			// 68020+: check format word
-			uint16_t formatWord = (Memory[sp + 6] << 8) | Memory[sp + 7];
-			uint16_t format = (formatWord >> 12) & 0xF;
-			// Format 0 = 4 words (8 bytes), Format 2 = 6 words (12 bytes)
-			if (format == 0) frameSize = 8;
-			else if (format == 2) frameSize = 12;
-			else frameSize = 8; // fallback
-		} else {
-			frameSize = 6;
-		}
+	// Read potentially-modified PC (callback may have changed it)
+	uint32_t newPC = 0;
+	uc_reg_read(uc, UC_M68K_REG_PC, &newPC);
 
-		sp += frameSize;
-		uc_reg_write(uc_, UC_M68K_REG_A7, &sp);
-		uint32_t srVal = sr;
-		uc_reg_write(uc_, UC_M68K_REG_SR, &srVal);
-		uc_reg_write(uc_, UC_M68K_REG_PC, &newPC);
+	// Pop the exception frame: restore SR, set PC, adjust SP.
+	// For 68000/010 (format 0): frame = 6 bytes (SR + PC)
+	// For 68020+ (format 2): frame = 8 bytes (SR + PC + format/vector)
+	uint16_t sr = (Memory[sp] << 8) | Memory[sp + 1];
+	uint32_t frameSize;
+	if (cpuModelMajor >= 2) {
+		// 68020+: check format word
+		uint16_t formatWord = (Memory[sp + 6] << 8) | Memory[sp + 7];
+		uint16_t format = (formatWord >> 12) & 0xF;
+		// Format 0 = 4 words (8 bytes), Format 2 = 6 words (12 bytes)
+		if (format == 0) frameSize = 8;
+		else if (format == 2) frameSize = 12;
+		else frameSize = 8; // fallback
+	} else {
+		frameSize = 6;
 	}
+
+	sp += frameSize;
+	uc_reg_write(uc, UC_M68K_REG_A7, &sp);
+	uint32_t srVal = sr;
+	uc_reg_write(uc, UC_M68K_REG_SR, &srVal);
+	uc_reg_write(uc, UC_M68K_REG_PC, &newPC);
+	return true;
+}
+
+// Hook for A-line and F-line exception handler stubs (used in single-step mode).
+static void exceptionHook(uc_engine *uc_, uint64_t address,
+                          uint32_t size, void *user_data) {
+	(void)uc_;
+	(void)user_data;
+	(void)size;
+	dispatchTrapFromExceptionFrame((uint32_t)address);
 }
 
 // ================================================================
@@ -401,6 +404,70 @@ uint32_t cpuExecuteInstruction(void) {
 
 	lastInstructionTime = 1;
 	return lastInstructionTime;
+}
+
+// ================================================================
+// Batch Execution (Unicorn exits)
+// ================================================================
+
+void cpuEnableBatchMode(void) {
+	if (!uc) return;
+	uc_ctl_exits_enable(uc);
+	uint64_t exits[] = { kALineHandlerAddr, kFLineHandlerAddr };
+	uc_ctl_set_exits(uc, exits, 2);
+}
+
+void cpuDisableBatchMode(void) {
+	if (!uc) return;
+	uc_ctl_exits_disable(uc);
+}
+
+bool cpuRunBatch(void) {
+	if (!uc || stopped) return false;
+
+	uint32_t pc = cpuGetPC();
+	uc_err err = uc_emu_start(uc, pc, 0, 0, 0);
+
+	if (stopped) return false;
+
+	uint32_t newPC = cpuGetPC();
+
+	if (err == UC_ERR_OK) {
+		// Stopped at an exit address (A-line or F-line handler)
+		if (newPC == kALineHandlerAddr || newPC == kFLineHandlerAddr) {
+			dispatchTrapFromExceptionFrame(newPC);
+			return !stopped;
+		}
+		// uc_emu_stop was called (e.g. from a trap handler)
+		return false;
+	}
+
+	if (err == UC_ERR_EXCEPTION) {
+		// Fallback: CPU didn't vector, PC is at the trapping instruction
+		if (newPC + 1 < MemorySize) {
+			uint16_t opcode = (Memory[newPC] << 8) | Memory[newPC + 1];
+			if ((opcode & 0xF000) == 0xA000 && alineFunc) {
+				cpuSetPC(newPC + 2);
+				alineFunc(opcode);
+			} else if ((opcode & 0xF000) == 0xF000 && flineFunc) {
+				cpuSetPC(newPC + 2);
+				flineFunc(opcode);
+			} else {
+				fprintf(stderr, "M68K: unhandled exception at PC=%08X opcode=%04X\n",
+				        newPC, opcode);
+			}
+		}
+		return !stopped;
+	}
+
+	if (err == UC_ERR_FETCH_UNMAPPED) {
+		// PC went to unmapped memory (e.g. PC=0 means program exit)
+		return false;
+	}
+
+	fprintf(stderr, "M68K: batch execution error at PC=%08X: %s\n",
+	        newPC, uc_strerror(err));
+	return false;
 }
 
 // ================================================================

@@ -476,67 +476,85 @@ std::string find_exe(const std::string &name)
 
 void MainLoop()
 {
-	#if 0
-	auto begin_emu_time = std::chrono::high_resolution_clock::now();
-	fprintf(stderr, "Begin Emulation Time: %20lld\n", (begin_emu_time - start_time).count());
-	#endif
+	bool useBatch = !profiler && !Flags.traceCPU && !Flags.traceMacsbug;
 
+	if (useBatch) {
+		// Batch execution: run at full JIT speed, stopping only at
+		// A-line/F-line traps via Unicorn's exits mechanism.
+		cpuEnableBatchMode();
+		for (;;) {
+			if (cpuGetStop()) break;
 
-	uint64_t cycles = 0;
-	for (;;)
-	{
-		uint32_t pc = cpuGetPC();
-		uint32_t sp = cpuGetAReg(7);
+			uint32_t pc = cpuGetPC();
+			if (pc == 0x00000000) {
+				fprintf(stderr, "Exiting - PC = 0\n");
+				exit(EX_SOFTWARE);
+			}
 
-		if (pc == 0x00000000)
+			if (!cpuRunBatch()) break;
+
+			// Check stack bounds at trap boundaries
+			uint32_t sp = cpuGetAReg(7);
+			if (sp < Flags.stackRange.first) {
+				fprintf(stderr, "Stack overflow error - please increase the stack size (--stack=size)\n");
+				fprintf(stderr, "Current stack size is 0x%06x\n", Flags.stackSize);
+				exit(EX_SOFTWARE);
+			}
+			if (sp > Flags.stackRange.second) {
+				fprintf(stderr, "Stack underflow error\n");
+				exit(EX_SOFTWARE);
+			}
+		}
+		cpuDisableBatchMode();
+	} else {
+		// Single-step execution: used when profiling or tracing is active.
+		uint64_t cycles = 0;
+		for (;;)
 		{
-			fprintf(stderr, "Exiting - PC = 0\n");
-			exit(EX_SOFTWARE);
+			uint32_t pc = cpuGetPC();
+			uint32_t sp = cpuGetAReg(7);
+
+			if (pc == 0x00000000)
+			{
+				fprintf(stderr, "Exiting - PC = 0\n");
+				exit(EX_SOFTWARE);
+			}
+
+			if (sp < Flags.stackRange.first)
+			{
+				fprintf(stderr, "Stack overflow error - please increase the stack size (--stack=size)\n");
+				fprintf(stderr, "Current stack size is 0x%06x\n", Flags.stackSize);
+				exit(EX_SOFTWARE);
+			}
+
+			if (sp > Flags.stackRange.second)
+			{
+				fprintf(stderr, "Stack underflow error\n");
+				exit(EX_SOFTWARE);
+			}
+
+			if (cpuGetStop()) break;
+
+			uint16_t opcode = 0;
+			if (profiler) {
+				opcode = ReadWord(Memory, pc);
+				profiler->beforeInstruction(pc, opcode);
+			}
+
+			#ifndef CPU_INSTRUCTION_LOGGING
+			if (Flags.traceCPU || Flags.traceMacsbug)
+			{
+				InstructionLogger();
+			}
+			#endif
+
+			uint32_t icycles = cpuExecuteInstruction();
+			cycles += icycles;
+
+			if (profiler)
+				profiler->afterInstruction(pc, icycles);
 		}
-
-		if (sp < Flags.stackRange.first)
-		{
-			fprintf(stderr, "Stack overflow error - please increase the stack size (--stack=size)\n");
-			fprintf(stderr, "Current stack size is 0x%06x\n", Flags.stackSize);
-			exit(EX_SOFTWARE);
-		}
-
-		if (sp > Flags.stackRange.second)
-		{
-			fprintf(stderr, "Stack underflow error\n");
-			exit(EX_SOFTWARE);
-		}
-
-
-		if (cpuGetStop()) break; // will this also be set by an interrupt?
-
-		uint16_t opcode = 0;
-		if (profiler) {
-			opcode = ReadWord(Memory, pc);
-			profiler->beforeInstruction(pc, opcode);
-		}
-
-		#ifndef CPU_INSTRUCTION_LOGGING
-		if (Flags.traceCPU || Flags.traceMacsbug)
-		{
-			InstructionLogger();
-		}
-		#endif
-
-		uint32_t icycles = cpuExecuteInstruction();
-		cycles += icycles;
-
-		if (profiler)
-			profiler->afterInstruction(pc, icycles);
 	}
-
-	#if 0
-	auto end_emu_time = std::chrono::high_resolution_clock::now();
-	fprintf(stderr, "  End Emulation Time: %20lld\n", (end_emu_time - start_time).count());
-	fprintf(stderr, "              Cycles: %20lld\n", cycles);
-	#endif
-
-
 }
 
 // -- PPC support --
