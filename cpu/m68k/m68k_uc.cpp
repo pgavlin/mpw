@@ -126,7 +126,8 @@ static void exceptionHook(uc_engine *uc_, uint64_t address,
 
 		sp += frameSize;
 		uc_reg_write(uc_, UC_M68K_REG_A7, &sp);
-		uc_reg_write(uc_, UC_M68K_REG_SR, (uint32_t[]){sr});
+		uint32_t srVal = sr;
+		uc_reg_write(uc_, UC_M68K_REG_SR, &srVal);
 		uc_reg_write(uc_, UC_M68K_REG_PC, &newPC);
 	}
 }

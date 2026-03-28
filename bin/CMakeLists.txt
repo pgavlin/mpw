@@ -8,11 +8,26 @@ endif()
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Find editline/readline headers
-find_path(EDITLINE_INCLUDE_DIR readline/readline.h
+# Some systems provide editline/readline.h instead of readline/readline.h
+find_path(READLINE_INCLUDE_DIR readline/readline.h
 	PATHS /usr/include /usr/local/include /tmp/libedit-dev/usr/include
+	NO_DEFAULT_PATH
 )
-if(EDITLINE_INCLUDE_DIR)
-	include_directories("${EDITLINE_INCLUDE_DIR}")
+if(READLINE_INCLUDE_DIR)
+	include_directories("${READLINE_INCLUDE_DIR}")
+else()
+	find_path(EDITLINE_INCLUDE_DIR editline/readline.h
+		PATHS /usr/include /usr/local/include
+	)
+	if(EDITLINE_INCLUDE_DIR)
+		# Map editline/ to readline/ so #include <readline/readline.h> works
+		set(EDITLINE_COMPAT_DIR "${CMAKE_CURRENT_BINARY_DIR}/editline_compat")
+		file(MAKE_DIRECTORY "${EDITLINE_COMPAT_DIR}/readline")
+		execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
+			"${EDITLINE_INCLUDE_DIR}/editline/readline.h"
+			"${EDITLINE_COMPAT_DIR}/readline/readline.h")
+		include_directories("${EDITLINE_COMPAT_DIR}")
+	endif()
 endif()
 
 add_custom_command(
@@ -73,6 +88,7 @@ target_link_libraries(mpw M68K_LIB)
 target_link_libraries(mpw PPC_LIB)
 target_link_libraries(mpw TOOLBOX_LIB)
 target_link_libraries(mpw MPW_LIB)
+target_link_libraries(mpw TOOLBOX_LIB)
 target_link_libraries(mpw MPLITE_LIB)
 target_link_libraries(mpw MACOS_LIB)
 
@@ -93,6 +109,10 @@ if(NOT EDITLINE_LIB)
 	endif()
 endif()
 target_link_libraries(mpw ${EDITLINE_LIB})
+
+if(NOT APPLE)
+	target_link_libraries(mpw bsd)
+endif()
 
 add_executable(disasm disasm.cpp)
 target_link_libraries(disasm M68K_LIB)

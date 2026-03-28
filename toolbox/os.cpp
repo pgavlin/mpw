@@ -55,6 +55,8 @@
 #include "fs_spec.h"
 #include "path_utils.h"
 
+#include <cstring>
+
 using ToolBox::Log;
 
 using MacOS::macos_error_from_errno;

@@ -55,14 +55,18 @@ set_source_files_properties(
 add_library(TOOLBOX_LIB ${TOOLBOX_SRC})
 target_link_libraries(TOOLBOX_LIB MACOS_LIB sane RSRC_LIB)
 
+if(NOT APPLE)
+	target_link_libraries(TOOLBOX_LIB bsd)
+endif()
+
 add_executable(pef_test pef_test.cpp)
-target_link_libraries(pef_test TOOLBOX_LIB MPW_LIB MACOS_LIB MPLITE_LIB M68K_LIB RSRC_LIB sane)
+target_link_libraries(pef_test TOOLBOX_LIB MPW_LIB TOOLBOX_LIB MACOS_LIB MPLITE_LIB M68K_LIB RSRC_LIB sane)
 
 add_executable(cfm_test cfm_test.cpp)
-target_link_libraries(cfm_test TOOLBOX_LIB MPW_LIB MACOS_LIB MPLITE_LIB M68K_LIB PPC_LIB RSRC_LIB sane)
+target_link_libraries(cfm_test TOOLBOX_LIB MPW_LIB TOOLBOX_LIB MACOS_LIB MPLITE_LIB M68K_LIB PPC_LIB RSRC_LIB sane)
 
 add_executable(dispatch_test dispatch_test.cpp)
-target_link_libraries(dispatch_test TOOLBOX_LIB MPW_LIB MACOS_LIB MPLITE_LIB M68K_LIB PPC_LIB RSRC_LIB sane)
+target_link_libraries(dispatch_test TOOLBOX_LIB MPW_LIB TOOLBOX_LIB MACOS_LIB MPLITE_LIB M68K_LIB PPC_LIB RSRC_LIB sane)
 
 add_executable(pef_inspect pef_inspect.cpp)
-target_link_libraries(pef_inspect TOOLBOX_LIB MPW_LIB MACOS_LIB MPLITE_LIB M68K_LIB PPC_LIB RSRC_LIB sane)
+target_link_libraries(pef_inspect TOOLBOX_LIB MPW_LIB TOOLBOX_LIB MACOS_LIB MPLITE_LIB M68K_LIB PPC_LIB RSRC_LIB sane)

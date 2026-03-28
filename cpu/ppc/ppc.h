@@ -1,6 +1,7 @@
 #ifndef __cpu_ppc_h__
 #define __cpu_ppc_h__
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 

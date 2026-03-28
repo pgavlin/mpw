@@ -39,6 +39,10 @@ static char sccsid[] = "@(#)realpath.c	8.1 (Berkeley) 2/16/94";
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#ifndef __APPLE__
+#include <bsd/string.h>
+#endif
 //#include "un-namespace.h"
 
 #define FS_SPEC
