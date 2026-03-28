@@ -433,6 +433,167 @@ namespace RM
 			std::memcpy(dst, src, count);
 			return SetResError(0);
 		}
+
+		uint16_t GetNamedResource(uint32_t type, const std::string &name, uint32_t &theHandle)
+		{
+			theHandle = 0;
+			for (auto &of : openFiles) {
+				const rsrc::ResourceEntry *entry = of.file->findResource(type, name);
+				if (entry) {
+					return LoadResourceFromEntry(entry, of.file.get(), of.refNum, theHandle);
+				}
+			}
+			return SetResError(MacOS::resNotFound);
+		}
+
+		uint16_t Get1NamedResource(uint32_t type, const std::string &name, uint32_t &theHandle)
+		{
+			theHandle = 0;
+			auto *of = currentFile();
+			if (of) {
+				const rsrc::ResourceEntry *entry = of->file->findResource(type, name);
+				if (entry) {
+					return LoadResourceFromEntry(entry, of->file.get(), of->refNum, theHandle);
+				}
+			}
+			return SetResError(MacOS::resNotFound);
+		}
+
+		uint16_t DetachResource(uint32_t theResource)
+		{
+			auto iter = rhandle_map.find(theResource);
+			if (iter == rhandle_map.end()) return SetResError(MacOS::resNotFound);
+			rhandle_map.erase(iter);
+			return SetResError(0);
+		}
+
+		uint16_t LoadResource(uint32_t theResource)
+		{
+			auto iter = rhandle_map.find(theResource);
+			if (iter == rhandle_map.end()) return SetResError(MacOS::resNotFound);
+
+			auto info = MM::GetHandleInfo(theResource);
+			if (info.error()) return SetResError(MacOS::resNotFound);
+			if (info->size) return SetResError(0);
+
+			auto *of = findOpenFile(iter->second.refNum);
+			if (!of) return SetResError(MacOS::resFNotFound);
+
+			const rsrc::ResourceEntry *entry = of->file->findResource(iter->second.type, iter->second.id);
+			if (!entry) return SetResError(MacOS::resNotFound);
+
+			auto resData = of->file->loadResource(*entry);
+			uint16_t err = MM::Native::ReallocHandle(theResource, resData.size());
+			if (err) return SetResError(err);
+
+			if (!resData.empty()) {
+				info = MM::GetHandleInfo(theResource);
+				std::memcpy(memoryPointer(info->address), resData.data(), resData.size());
+			}
+
+			return SetResError(0);
+		}
+
+		uint16_t SetResAttrs(uint32_t theResource, uint16_t attrs)
+		{
+			auto iter = rhandle_map.find(theResource);
+			if (iter == rhandle_map.end()) return SetResError(MacOS::resNotFound);
+			iter->second.attributes = attrs;
+			return SetResError(0);
+		}
+
+		uint16_t WriteResource(uint32_t theResource)
+		{
+			auto iter = rhandle_map.find(theResource);
+			if (iter == rhandle_map.end()) return SetResError(MacOS::resNotFound);
+
+			auto *of = findOpenFile(iter->second.refNum);
+			if (!of) return SetResError(MacOS::resFNotFound);
+
+			auto info = MM::GetHandleInfo(theResource);
+			if (!info.error() && info->size > 0) {
+				std::vector<uint8_t> resData(info->size);
+				std::memcpy(resData.data(), memoryPointer(info->address), info->size);
+				of->file->updateResource(iter->second.type, iter->second.id, resData);
+			}
+
+			of->dirty = true;
+			return SetResError(0);
+		}
+
+		uint16_t Count1Resources(uint32_t type)
+		{
+			auto *of = currentFile();
+			if (of) return of->file->countResources(type);
+			return 0;
+		}
+
+		uint16_t Get1IndResource(uint32_t type, uint16_t index, uint32_t &theHandle)
+		{
+			theHandle = 0;
+			auto *of = currentFile();
+			if (of) {
+				const rsrc::ResourceEntry *entry = of->file->getIndResource(type, index);
+				if (entry) {
+					return LoadResourceFromEntry(entry, of->file.get(), of->refNum, theHandle);
+				}
+			}
+			return SetResError(MacOS::resNotFound);
+		}
+
+		uint16_t Count1Types()
+		{
+			auto *of = currentFile();
+			if (of) return of->file->countTypes();
+			return 0;
+		}
+
+		uint16_t Get1IndType(uint16_t index, uint32_t &theType)
+		{
+			theType = 0;
+			auto *of = currentFile();
+			if (of) {
+				theType = of->file->getIndType(index);
+			}
+			return SetResError(0);
+		}
+
+		uint16_t HOpenResFile(uint16_t vRefNum, uint32_t dirID, const std::string &fileName, uint8_t permission, int16_t &outRefNum)
+		{
+			outRefNum = -1;
+			std::string sname = fileName;
+
+			sname = OS::FSSpecManager::ExpandPath(sname, dirID);
+			if (sname.empty()) return SetResError(MacOS::dirNFErr);
+
+			return OpenResourceFile(sname, permission, outRefNum);
+		}
+
+		uint16_t OpenRFPerm(const std::string &fileName, uint16_t vRefNum, uint16_t permission, int16_t &outRefNum)
+		{
+			outRefNum = -1;
+			return OpenResourceFile(fileName, permission, outRefNum);
+		}
+
+		uint16_t GetResFileAttrs(int16_t refNum)
+		{
+			auto *of = findOpenFile(refNum);
+			if (!of) {
+				SetResError(MacOS::resFNotFound);
+				return 0;
+			}
+			SetResError(0);
+			return of->file->fileAttributes();
+		}
+
+		uint16_t SetResFileAttrs(int16_t refNum, uint16_t attrs)
+		{
+			auto *of = findOpenFile(refNum);
+			if (!of) return SetResError(MacOS::resFNotFound);
+			of->file->setFileAttributes(attrs);
+			return SetResError(0);
+		}
+
 	}
 
 	uint16_t CloseResFile(uint16_t trap)

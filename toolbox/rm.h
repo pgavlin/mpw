@@ -30,6 +30,21 @@ namespace RM
 		uint16_t Get1Resource(uint32_t type, uint16_t id, uint32_t &theHandle);
 		uint16_t CreateResFile(const std::string &name);
 		uint16_t ReadPartialResource(uint32_t theResource, uint32_t offset, uint32_t buffer, uint32_t count);
+
+		uint16_t GetNamedResource(uint32_t type, const std::string &name, uint32_t &theHandle);
+		uint16_t Get1NamedResource(uint32_t type, const std::string &name, uint32_t &theHandle);
+		uint16_t DetachResource(uint32_t theResource);
+		uint16_t LoadResource(uint32_t theResource);
+		uint16_t SetResAttrs(uint32_t theResource, uint16_t attrs);
+		uint16_t WriteResource(uint32_t theResource);
+		uint16_t Count1Resources(uint32_t type);
+		uint16_t Get1IndResource(uint32_t type, uint16_t index, uint32_t &theHandle);
+		uint16_t Count1Types();
+		uint16_t Get1IndType(uint16_t index, uint32_t &theType);
+		uint16_t HOpenResFile(uint16_t vRefNum, uint32_t dirID, const std::string &fileName, uint8_t permission, int16_t &outRefNum);
+		uint16_t OpenRFPerm(const std::string &fileName, uint16_t vRefNum, uint16_t permission, int16_t &outRefNum);
+		uint16_t GetResFileAttrs(int16_t refNum);
+		uint16_t SetResFileAttrs(int16_t refNum, uint16_t attrs);
 	}
 
 	uint16_t CloseResFile(uint16_t trap);

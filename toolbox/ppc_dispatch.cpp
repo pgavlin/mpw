@@ -39,6 +39,7 @@
 #include <vector>
 #include <map>
 #include <unistd.h>
+#include <sys/stat.h>
 
 namespace {
 
@@ -701,6 +702,448 @@ static void wrap_openresfile() {
 	SetGPR(3, (uint32_t)(int32_t)RM::Native::OpenResFile(name));
 }
 
+// ================================================================
+// Phase 9: Complete parity with 68K trap implementations
+// ================================================================
+
+// -- Memory Manager: remaining gaps --
+
+static void wrap_GetHandleSize() {
+	uint32_t size = 0;
+	MM::Native::GetHandleSize(GetGPR(3), size);
+	SetGPR(3, size);
+}
+
+static void wrap_NewHandleClear() {
+	uint32_t handle = 0;
+	MM::Native::NewHandle(GetGPR(3), true, handle);
+	SetGPR(3, handle);
+}
+
+static void wrap_ReallocHandle() {
+	SetGPR(3, MM::Native::ReallocHandle(GetGPR(3), GetGPR(4)));
+}
+
+static void wrap_EmptyHandle() {
+	// EmptyHandle: release the data but keep the handle.
+	// We need to go through the 68K function since it accesses
+	// HandleMap internals. Set up A0 and call the trap handler.
+	cpuSetAReg(0, GetGPR(3));
+	SetGPR(3, MM::EmptyHandle(0xA02B));
+}
+
+static void wrap_HandToHand() {
+	// HandToHand(srcHandle) -> destHandle in A0, error in D0
+	cpuSetAReg(0, GetGPR(3));
+	uint16_t err = MM::HandToHand(0xA9E1);
+	SetGPR(3, cpuGetAReg(0));
+	SetGPR(4, err);  // some callers check MemError instead
+}
+
+static void wrap_PtrToHand() {
+	// PtrToHand(srcPtr, size) -> destHandle, error
+	cpuSetAReg(0, GetGPR(3));
+	cpuSetDReg(0, GetGPR(4));
+	uint16_t err = MM::PtrToHand(0xA9E3);
+	SetGPR(3, cpuGetAReg(0));
+}
+
+static void wrap_PtrAndHand() {
+	// PtrAndHand(ptr, handle, size) -> error
+	cpuSetAReg(0, GetGPR(3));
+	cpuSetAReg(1, GetGPR(4));
+	cpuSetDReg(0, GetGPR(5));
+	SetGPR(3, MM::PtrAndHand(0xA9EF));
+}
+
+static void wrap_StripAddress() {
+	// In 32-bit mode, StripAddress is a no-op (returns the address unchanged).
+	SetGPR(3, GetGPR(3));
+}
+
+static void wrap_RecoverHandle() {
+	// RecoverHandle(ptr) -> handle
+	cpuSetAReg(0, GetGPR(3));
+	MM::RecoverHandle(0xA128);
+	SetGPR(3, cpuGetAReg(0));
+}
+
+static void wrap_HandleZone() {
+	// HandleZone(handle) -> zone ptr
+	// Single-zone emulator: always return ApplZone
+	SetGPR(3, memoryReadLong(MacOS::ApplZone));
+}
+
+static void wrap_MaxMem() {
+	// MaxMem(grow) -> size
+	// grow is a VAR param pointer
+	uint32_t growPtr = GetGPR(3);
+	if (growPtr) memoryWriteLong(0, growPtr);
+	SetGPR(3, 8 * 1024 * 1024); // report 8MB available
+}
+
+static void wrap_CompactMem() {
+	// CompactMem(cbNeeded) -> largest free block
+	SetGPR(3, 8 * 1024 * 1024);
+}
+
+static void wrap_ReserveMem() {
+	// ReserveMem(cbNeeded) -> OSErr
+	SetGPR(3, 0); // always succeed
+}
+
+static void wrap_MaxBlock() {
+	// MaxBlock() -> largest free block
+	SetGPR(3, 8 * 1024 * 1024);
+}
+
+static void wrap_PurgeSpace() {
+	// PurgeSpace(total, contig) — both are VAR params
+	uint32_t totalPtr = GetGPR(3);
+	uint32_t contigPtr = GetGPR(4);
+	if (totalPtr) memoryWriteLong(8 * 1024 * 1024, totalPtr);
+	if (contigPtr) memoryWriteLong(8 * 1024 * 1024, contigPtr);
+}
+
+static void wrap_MaxApplZone() {
+	// no-op
+}
+
+static void wrap_SetApplLimit() {
+	// no-op
+}
+
+static void wrap_StackSpace() {
+	// Return a large value
+	SetGPR(3, 256 * 1024);
+}
+
+// -- Resource Manager: remaining gaps --
+
+static void wrap_GetNamedResource() {
+	uint32_t h = 0;
+	std::string name = ToolBox::ReadPString(GetGPR(4), false);
+	RM::Native::GetNamedResource(GetGPR(3), name, h);
+	SetGPR(3, h);
+}
+
+static void wrap_Get1NamedResource() {
+	uint32_t h = 0;
+	std::string name = ToolBox::ReadPString(GetGPR(4), false);
+	RM::Native::Get1NamedResource(GetGPR(3), name, h);
+	SetGPR(3, h);
+}
+
+static void wrap_DetachResource() {
+	RM::Native::DetachResource(GetGPR(3));
+}
+
+static void wrap_LoadResource() {
+	RM::Native::LoadResource(GetGPR(3));
+}
+
+static void wrap_SetResAttrs() {
+	RM::Native::SetResAttrs(GetGPR(3), (uint16_t)GetGPR(4));
+}
+
+static void wrap_WriteResource() {
+	RM::Native::WriteResource(GetGPR(3));
+}
+
+static void wrap_Count1Resources() {
+	SetGPR(3, RM::Native::Count1Resources(GetGPR(3)));
+}
+
+static void wrap_Get1IndResource() {
+	uint32_t h = 0;
+	RM::Native::Get1IndResource(GetGPR(3), (uint16_t)GetGPR(4), h);
+	SetGPR(3, h);
+}
+
+static void wrap_Count1Types() {
+	SetGPR(3, RM::Native::Count1Types());
+}
+
+static void wrap_Get1IndType() {
+	uint32_t type = 0;
+	RM::Native::Get1IndType((uint16_t)GetGPR(3), type);
+	if (GetGPR(4)) memoryWriteLong(type, GetGPR(4));
+	SetGPR(3, type);
+}
+
+static void wrap_HOpenResFile() {
+	uint16_t vRefNum = (uint16_t)GetGPR(3);
+	uint32_t dirID = GetGPR(4);
+	std::string name = ToolBox::ReadPString(GetGPR(5), true);
+	uint8_t perm = (uint8_t)GetGPR(6);
+	int16_t refNum = -1;
+	RM::Native::HOpenResFile(vRefNum, dirID, name, perm, refNum);
+	SetGPR(3, (uint32_t)(int32_t)refNum);
+}
+
+static void wrap_OpenRFPerm() {
+	std::string name = ToolBox::ReadPString(GetGPR(3), true);
+	uint16_t vRefNum = (uint16_t)GetGPR(4);
+	uint16_t perm = (uint16_t)GetGPR(5);
+	int16_t refNum = -1;
+	RM::Native::OpenRFPerm(name, vRefNum, perm, refNum);
+	SetGPR(3, (uint32_t)(int32_t)refNum);
+}
+
+static void wrap_HCreateResFile() {
+	// HCreateResFile(vRefNum, dirID, fileName)
+	// Just create an empty resource file at the resolved path.
+	uint16_t vRefNum = (uint16_t)GetGPR(3);
+	uint32_t dirID = GetGPR(4);
+	std::string name = ToolBox::ReadPString(GetGPR(5), true);
+	// For now, delegate to CreateResFile with the name
+	RM::Native::CreateResFile(name);
+}
+
+static void wrap_GetResFileAttrs() {
+	SetGPR(3, RM::Native::GetResFileAttrs((int16_t)GetGPR(3)));
+}
+
+static void wrap_SetResFileAttrs() {
+	RM::Native::SetResFileAttrs((int16_t)GetGPR(3), (uint16_t)GetGPR(4));
+}
+
+// -- File Manager: remaining gaps --
+
+static void wrap_GetEOF() {
+	// GetEOF(refNum, logEOFPtr) -> OSErr
+	// Uses a parameter block internally, but the high-level call is:
+	// pascal OSErr GetEOF(short refNum, long *logEOF);
+	int16_t refNum = (int16_t)GetGPR(3);
+	uint32_t logEOFPtr = GetGPR(4);
+
+	struct stat st;
+	if (::fstat(refNum, &st) < 0) {
+		SetGPR(3, (uint32_t)(int16_t)MacOS::ioErr);
+	} else {
+		if (logEOFPtr) memoryWriteLong((uint32_t)st.st_size, logEOFPtr);
+		SetGPR(3, 0);
+	}
+}
+
+static void wrap_FlushVol() {
+	// FlushVol(volName, vRefNum) -> OSErr
+	// No-op in emulation (no real volume buffers to flush)
+	SetGPR(3, 0);
+}
+
+static void wrap_GetVol() {
+	// GetVol(volNamePtr, vRefNumPtr) -> OSErr
+	uint32_t namePtr = GetGPR(3);
+	uint32_t vRefNumPtr = GetGPR(4);
+	if (namePtr) ToolBox::WritePString(namePtr, "MacOS");
+	if (vRefNumPtr) memoryWriteWord(0, vRefNumPtr);
+	SetGPR(3, 0);
+}
+
+static void wrap_SetVol() {
+	// SetVol(volName, vRefNum) -> OSErr
+	// No-op — single volume emulation
+	SetGPR(3, 0);
+}
+
+static void wrap_PBWriteSync() {
+	SetGPR(3, (uint32_t)(int16_t)OS::Native::Write(GetGPR(3)));
+}
+
+static void wrap_PBGetEOFSync() {
+	// PBGetEOF uses the same parameter block layout as GetEOF trap
+	uint32_t parm = GetGPR(3);
+	uint16_t ioRefNum = memoryReadWord(parm + 24);
+	struct stat st;
+	uint16_t d0;
+	if (::fstat(ioRefNum, &st) < 0) {
+		d0 = MacOS::ioErr;
+	} else {
+		d0 = 0;
+		memoryWriteLong((uint32_t)st.st_size, parm + 28);
+	}
+	memoryWriteWord(d0, parm + 16);
+	SetGPR(3, (uint32_t)(int16_t)d0);
+}
+
+static void wrap_PBGetVInfoSync() {
+	// Minimal implementation — return default volume info
+	uint32_t parm = GetGPR(3);
+	uint32_t namePtr = memoryReadLong(parm + 18);
+	if (namePtr) ToolBox::WritePString(namePtr, "MacOS");
+	memoryWriteWord(0, parm + 22);  // ioVRefNum
+	memoryWriteWord(0, parm + 16);  // ioResult
+	SetGPR(3, 0);
+}
+
+static void wrap_PBSetFPosSync() {
+	SetGPR(3, (uint32_t)(int16_t)OS::Native::SetFPos(GetGPR(3)));
+}
+
+static void wrap_PBGetFPosSync() {
+	SetGPR(3, (uint32_t)(int16_t)OS::Native::GetFPos(GetGPR(3)));
+}
+
+static void wrap_PBHDeleteSync() {
+	SetGPR(3, (uint32_t)(int16_t)OS::Native::Delete(GetGPR(3), 0xA209));
+}
+
+static void wrap_PBDeleteSync() {
+	SetGPR(3, (uint32_t)(int16_t)OS::Native::Delete(GetGPR(3), 0xA009));
+}
+
+// -- String Utilities --
+
+static void wrap_CmpString() {
+	// CmpString(aStr, bStr, aLen, bLen) -> 0 if equal, 1 if not
+	// PPC calling convention: r3=aStr, r4=bStr, r5=aLen, r6=bLen
+	uint32_t aStr = GetGPR(3);
+	uint32_t bStr = GetGPR(4);
+	uint32_t aLen = GetGPR(5);
+	uint32_t bLen = GetGPR(6);
+
+	if (aLen != bLen) { SetGPR(3, 1); return; }
+	if (aStr == bStr) { SetGPR(3, 0); return; }
+
+	std::string a = ToolBox::ReadString(aStr, aLen);
+	std::string b = ToolBox::ReadString(bStr, bLen);
+
+	bool eq = std::equal(a.begin(), a.end(), b.begin(),
+		[](char a, char b) { return toupper(a) == toupper(b); });
+	SetGPR(3, eq ? 0 : 1);
+}
+
+static void wrap_EqualString() {
+	// EqualString(str1, str2, caseSens, diacSens) -> Boolean
+	// PPC: r3=str1 (pstring), r4=str2 (pstring), r5=caseSens, r6=diacSens
+	uint32_t s1Ptr = GetGPR(3);
+	uint32_t s2Ptr = GetGPR(4);
+	bool caseSens = GetGPR(5) != 0;
+
+	std::string s1 = ToolBox::ReadPString(s1Ptr, false);
+	std::string s2 = ToolBox::ReadPString(s2Ptr, false);
+
+	if (s1.size() != s2.size()) { SetGPR(3, 0); return; }
+
+	bool eq = std::equal(s1.begin(), s1.end(), s2.begin(),
+		[caseSens](char a, char b) {
+			if (!caseSens) { a = toupper(a); b = toupper(b); }
+			return a == b;
+		});
+	SetGPR(3, eq ? 1 : 0);
+}
+
+static void wrap_RelString() {
+	// RelString(str1, str2, caseSens, diacSens) -> -1/0/1
+	uint32_t s1Ptr = GetGPR(3);
+	uint32_t s2Ptr = GetGPR(4);
+	bool caseSens = GetGPR(5) != 0;
+
+	std::string s1 = ToolBox::ReadPString(s1Ptr, false);
+	std::string s2 = ToolBox::ReadPString(s2Ptr, false);
+
+	for (size_t i = 0; i < std::min(s1.size(), s2.size()); ++i) {
+		unsigned a = (unsigned char)s1[i];
+		unsigned b = (unsigned char)s2[i];
+		if (!caseSens) { a = toupper(a); b = toupper(b); }
+		if (a != b) { SetGPR(3, a < b ? (uint32_t)-1 : 1); return; }
+	}
+	if (s1.size() == s2.size()) SetGPR(3, 0);
+	else SetGPR(3, s1.size() < s2.size() ? (uint32_t)-1 : 1);
+}
+
+// -- Time --
+
+static void wrap_Microseconds() {
+	// Microseconds(microTickCountPtr)
+	// Returns 64-bit microsecond count via a UnsignedWide* parameter
+	uint32_t outPtr = GetGPR(3);
+	static auto start = std::chrono::steady_clock::now();
+	auto now = std::chrono::steady_clock::now();
+	uint64_t us = std::chrono::duration_cast<std::chrono::microseconds>(now - start).count();
+	if (outPtr) {
+		memoryWriteLong((uint32_t)(us >> 32), outPtr);
+		memoryWriteLong((uint32_t)(us & 0xFFFFFFFF), outPtr + 4);
+	}
+}
+
+static void wrap_ReadDateTime() {
+	// ReadDateTime(secsPtr) -> OSErr
+	uint32_t secsPtr = GetGPR(3);
+	time_t now = time(nullptr);
+	uint32_t macTime = (uint32_t)OS::UnixToMac(now);
+	if (secsPtr) memoryWriteLong(macTime, secsPtr);
+	SetGPR(3, 0);
+}
+
+// -- Misc no-ops --
+
+static void wrap_FlushCodeCache() {
+	// No-op in emulation
+}
+
+static void wrap_FlushInstructionCache() {
+	// No-op in emulation
+}
+
+static void wrap_FlushDataCache() {
+	// No-op in emulation
+}
+
+static void wrap_SysEnvirons() {
+	// SysEnvirons(versNum, envRecPtr) -> OSErr
+	uint32_t envRecPtr = GetGPR(4);
+	if (envRecPtr) {
+		// Zero out the SysEnvRec (16 bytes)
+		for (int i = 0; i < 16; i++) memoryWriteByte(0, envRecPtr + i);
+		memoryWriteWord(1, envRecPtr);     // environsVersion = 1
+		memoryWriteWord(3, envRecPtr + 2); // machineType = 3 (Mac II)
+		memoryWriteWord(0x0755, envRecPtr + 4); // systemVersion = 7.5.5
+		memoryWriteWord(2, envRecPtr + 6); // processor = env68020
+		memoryWriteByte(1, envRecPtr + 8); // hasFPU = true
+		memoryWriteByte(1, envRecPtr + 9); // hasColorQD = true
+	}
+	SetGPR(3, 0);
+}
+
+static void wrap_UnloadSeg() {
+	// No-op for PPC
+}
+
+static void wrap_InsTime() {
+	// Time Manager — no-op stubs
+}
+
+static void wrap_RmvTime() {
+}
+
+static void wrap_PrimeTime() {
+}
+
+static void wrap_ReadXPRam() {
+	// ReadXPRam(buf, count, offset)
+	// Zero-fill the buffer
+	uint32_t buf = GetGPR(3);
+	uint32_t count = GetGPR(4);
+	for (uint32_t i = 0; i < count; i++) memoryWriteByte(0, buf + i);
+}
+
+static void wrap_HWPriv() {
+	// HWPriv selector dispatch — most are no-ops
+	SetGPR(3, 0);
+}
+
+static void wrap_StringToNum() {
+	// StringToNum(theString, theNum)
+	uint32_t strPtr = GetGPR(3);
+	uint32_t numPtr = GetGPR(4);
+	std::string s = ToolBox::ReadPString(strPtr, false);
+	int32_t num = 0;
+	try { num = std::stol(s); } catch (...) {}
+	if (numPtr) memoryWriteLong((uint32_t)num, numPtr);
+}
+
 } // anonymous namespace
 
 // ================================================================
@@ -902,8 +1345,89 @@ void RegisterStdCLibImports() {
 	// -- Misc --
 	reg("InterfaceLib", "FindFolder", wrap_FindFolder);
 	reg("InterfaceLib", "numtostring", wrap_numtostring);
+	reg("InterfaceLib", "NumToString", wrap_numtostring);
+	reg("InterfaceLib", "StringToNum", wrap_StringToNum);
+	reg("InterfaceLib", "stringtonum", wrap_StringToNum);
 	reg("InterfaceLib", "createresfile", wrap_createresfile);
 	reg("InterfaceLib", "openresfile", wrap_openresfile);
+
+	// ================================================================
+	// Phase 9: Complete parity with 68K trap implementations
+	// ================================================================
+
+	// -- Memory Manager: remaining gaps --
+	reg("InterfaceLib", "GetHandleSize", wrap_GetHandleSize);
+	reg("InterfaceLib", "NewHandleClear", wrap_NewHandleClear);
+	reg("InterfaceLib", "ReallocateHandle", wrap_ReallocHandle);
+	reg("InterfaceLib", "ReallocHandle", wrap_ReallocHandle);
+	reg("InterfaceLib", "EmptyHandle", wrap_EmptyHandle);
+	reg("InterfaceLib", "HandToHand", wrap_HandToHand);
+	reg("InterfaceLib", "PtrToHand", wrap_PtrToHand);
+	reg("InterfaceLib", "PtrAndHand", wrap_PtrAndHand);
+	reg("InterfaceLib", "StripAddress", wrap_StripAddress);
+	reg("InterfaceLib", "RecoverHandle", wrap_RecoverHandle);
+	reg("InterfaceLib", "HandleZone", wrap_HandleZone);
+	reg("InterfaceLib", "MaxMem", wrap_MaxMem);
+	reg("InterfaceLib", "CompactMem", wrap_CompactMem);
+	reg("InterfaceLib", "ReserveMem", wrap_ReserveMem);
+	reg("InterfaceLib", "MaxBlock", wrap_MaxBlock);
+	reg("InterfaceLib", "PurgeSpace", wrap_PurgeSpace);
+	reg("InterfaceLib", "MaxApplZone", wrap_MaxApplZone);
+	reg("InterfaceLib", "SetApplLimit", wrap_SetApplLimit);
+	reg("InterfaceLib", "StackSpace", wrap_StackSpace);
+
+	// -- Resource Manager: remaining gaps --
+	reg("InterfaceLib", "GetNamedResource", wrap_GetNamedResource);
+	reg("InterfaceLib", "Get1NamedResource", wrap_Get1NamedResource);
+	reg("InterfaceLib", "DetachResource", wrap_DetachResource);
+	reg("InterfaceLib", "LoadResource", wrap_LoadResource);
+	reg("InterfaceLib", "SetResAttrs", wrap_SetResAttrs);
+	reg("InterfaceLib", "WriteResource", wrap_WriteResource);
+	reg("InterfaceLib", "Count1Resources", wrap_Count1Resources);
+	reg("InterfaceLib", "Get1IndResource", wrap_Get1IndResource);
+	reg("InterfaceLib", "Count1Types", wrap_Count1Types);
+	reg("InterfaceLib", "Get1IndType", wrap_Get1IndType);
+	reg("InterfaceLib", "HOpenResFile", wrap_HOpenResFile);
+	reg("InterfaceLib", "OpenRFPerm", wrap_OpenRFPerm);
+	reg("InterfaceLib", "HCreateResFile", wrap_HCreateResFile);
+	reg("InterfaceLib", "GetResFileAttrs", wrap_GetResFileAttrs);
+	reg("InterfaceLib", "SetResFileAttrs", wrap_SetResFileAttrs);
+
+	// -- File Manager: remaining gaps --
+	reg("InterfaceLib", "GetEOF", wrap_GetEOF);
+	reg("InterfaceLib", "FlushVol", wrap_FlushVol);
+	reg("InterfaceLib", "GetVol", wrap_GetVol);
+	reg("InterfaceLib", "SetVol", wrap_SetVol);
+	reg("InterfaceLib", "PBWriteSync", wrap_PBWriteSync);
+	reg("InterfaceLib", "PBGetEOFSync", wrap_PBGetEOFSync);
+	reg("InterfaceLib", "PBGetVInfoSync", wrap_PBGetVInfoSync);
+	reg("InterfaceLib", "PBSetFPosSync", wrap_PBSetFPosSync);
+	reg("InterfaceLib", "PBGetFPosSync", wrap_PBGetFPosSync);
+	reg("InterfaceLib", "PBHDeleteSync", wrap_PBHDeleteSync);
+	reg("InterfaceLib", "PBDeleteSync", wrap_PBDeleteSync);
+
+	// -- String Utilities --
+	reg("InterfaceLib", "CmpString", wrap_CmpString);
+	reg("InterfaceLib", "EqualString", wrap_EqualString);
+	reg("InterfaceLib", "equalstring", wrap_EqualString);
+	reg("InterfaceLib", "RelString", wrap_RelString);
+	reg("InterfaceLib", "relstring", wrap_RelString);
+
+	// -- Time --
+	reg("InterfaceLib", "Microseconds", wrap_Microseconds);
+	reg("InterfaceLib", "ReadDateTime", wrap_ReadDateTime);
+
+	// -- Misc --
+	reg("InterfaceLib", "FlushCodeCache", wrap_FlushCodeCache);
+	reg("InterfaceLib", "FlushInstructionCache", wrap_FlushInstructionCache);
+	reg("InterfaceLib", "FlushDataCache", wrap_FlushDataCache);
+	reg("InterfaceLib", "SysEnvirons", wrap_SysEnvirons);
+	reg("InterfaceLib", "UnloadSeg", wrap_UnloadSeg);
+	reg("InterfaceLib", "InsTime", wrap_InsTime);
+	reg("InterfaceLib", "RmvTime", wrap_RmvTime);
+	reg("InterfaceLib", "PrimeTime", wrap_PrimeTime);
+	reg("InterfaceLib", "ReadXPRam", wrap_ReadXPRam);
+	reg("InterfaceLib", "HWPriv", wrap_HWPriv);
 }
 
 // ================================================================
